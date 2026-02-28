@@ -1,0 +1,412 @@
+﻿# VidDrop — UI Guidelines & Design System
+
+---
+
+## Design Philosophy
+
+CORE AESTHETIC: Glassmorphism — frosted glass panels floating over
+a deep gradient background. Every element feels like it exists in
+a dimensional space, not flat on a screen.
+
+MOOD: Dark, premium, focused. Like a professional tool that also
+looks beautiful. Think: Arc Browser meets a download manager.
+
+PRINCIPLE 1 — Depth over flatness
+  Every card has: blur backdrop, subtle border, inner glow, shadow
+  Nothing sits flat — everything floats
+
+PRINCIPLE 2 — One thing at a time
+  UI shows only what's needed for current state
+  Transitions between states are smooth, never jarring
+
+PRINCIPLE 3 — Feedback for everything
+  Every click has a visual response
+  Loading states are never blank
+  Errors are human-readable, never raw stack traces
+
+PRINCIPLE 4 — Zero clutter
+  No logos, no branding, no nav bars
+  Just the tool, centered, focused
+
+---
+
+## Color System
+
+BACKGROUND BASE:
+bg-primary:    #0a0a0f   (near black, slightly blue tint)
+bg-secondary:  #0d0d18   (dark navy)
+
+GRADIENT BACKGROUND:
+  Direction: 135deg
+  Stop 1: #0a0a0f (0%)
+  Stop 2: #0d1117 (50%)
+  Stop 3: #0a0a1a (100%)
+
+ACCENT COLORS:
+  accent-primary:   #6366f1  (indigo — main CTA buttons)
+  accent-secondary: #8b5cf6  (violet — hover states)
+  accent-glow:      #6366f140 (indigo 25% opacity — glow effects)
+  accent-success:   #10b981  (emerald — done states)
+  accent-warning:   #f59e0b  (amber — ffmpeg warning)
+  accent-error:     #ef4444  (red — error states)
+
+GLASS COLORS:
+  glass-bg:         rgba(255, 255, 255, 0.04)
+  glass-border:     rgba(255, 255, 255, 0.08)
+  glass-hover:      rgba(255, 255, 255, 0.07)
+  glass-strong:     rgba(255, 255, 255, 0.06)
+
+TEXT COLORS:
+  text-primary:     #f1f5f9  (near white)
+  text-secondary:   #94a3b8  (slate 400)
+  text-muted:       #475569  (slate 600)
+  text-accent:      #818cf8  (indigo 400)
+
+---
+
+## Typography
+
+PRIMARY FONT: Inter
+  Import: https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700
+
+MONO FONT: JetBrains Mono
+  Import: https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500
+
+SCALE:
+  display:    32px / weight 700 / letter-spacing -0.02em
+  heading:    20px / weight 600 / letter-spacing -0.01em
+  body:       15px / weight 400 / line-height 1.6
+  small:      13px / weight 400 / color text-secondary
+  mono:       13px / JetBrains Mono / color text-accent
+  label:      11px / weight 500 / uppercase / letter-spacing 0.08em
+
+---
+
+## Glass Card System
+
+BASE GLASS CARD:
+  background:           rgba(255, 255, 255, 0.04)
+  border:               1px solid rgba(255, 255, 255, 0.08)
+  border-radius:        16px
+  backdrop-filter:      blur(20px) saturate(180%)
+  -webkit-backdrop-filter: blur(20px) saturate(180%)
+  box-shadow:           0 8px 32px rgba(0, 0, 0, 0.4),
+                        inset 0 1px 0 rgba(255, 255, 255, 0.06)
+
+ELEVATED CARD (main video card):
+  Same as base + stronger shadow:
+  box-shadow:           0 20px 60px rgba(0, 0, 0, 0.6),
+                        0 0 0 1px rgba(255, 255, 255, 0.06),
+                        inset 0 1px 0 rgba(255, 255, 255, 0.08)
+
+INNER PANEL (format option rows):
+  background:           rgba(255, 255, 255, 0.03)
+  border:               1px solid rgba(255, 255, 255, 0.05)
+  border-radius:        10px
+  No backdrop-filter needed (nested panels don't need blur)
+
+HOVER STATE for clickable cards:
+  background:           rgba(255, 255, 255, 0.07)
+  border-color:         rgba(99, 102, 241, 0.4)
+  box-shadow:           0 0 20px rgba(99, 102, 241, 0.15)
+  transition:           all 0.2s ease
+
+---
+
+## Background Decoration
+
+AMBIENT ORBS (CSS pseudo-elements, pointer-events: none):
+
+  ORB 1 (top-left):
+    width/height: 600px
+    background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%)
+    position: fixed, top: -200px, left: -200px
+    filter: blur(40px)
+
+  ORB 2 (bottom-right):
+    width/height: 500px
+    background: radial-gradient(circle, rgba(139,92,246,0.10) 0%, transparent 70%)
+    position: fixed, bottom: -150px, right: -150px
+    filter: blur(40px)
+
+  ORB 3 (center, subtle):
+    width/height: 800px
+    background: radial-gradient(circle, rgba(99,102,241,0.04) 0%, transparent 60%)
+    position: fixed, top: 50%, left: 50%, transform: translate(-50%,-50%)
+
+---
+
+## Component Specifications
+
+─── URL INPUT BAR ───────────────────────────────────
+
+Container:
+  max-width: 640px
+  margin: 0 auto
+
+Input field:
+  height: 56px
+  background: rgba(255,255,255,0.05)
+  border: 1px solid rgba(255,255,255,0.10)
+  border-radius: 14px
+  padding: 0 120px 0 20px  (right padding for button)
+  font-size: 15px
+color: text-primary
+  placeholder color: text-muted
+
+  FOCUS STATE:
+    border-color: rgba(99,102,241,0.6)
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.15)
+    outline: none
+
+Paste button (inside input, right side):
+  position: absolute, right: 8px, top: 50%, transform: translateY(-50%)
+  height: 38px, padding: 0 16px
+  background: rgba(99,102,241,0.2)
+  border: 1px solid rgba(99,102,241,0.3)
+  border-radius: 8px
+color: #818cf8
+  font-size: 13px, weight 500
+
+Fetch/Go button:
+  Full width below input OR right-side icon button
+  background: linear-gradient(135deg, #6366f1, #8b5cf6)
+  height: 56px, border-radius: 14px
+  font-weight: 600
+  box-shadow: 0 4px 20px rgba(99,102,241,0.4)
+
+  HOVER:
+    box-shadow: 0 4px 30px rgba(99,102,241,0.6)
+    transform: translateY(-1px)
+
+─── VIDEO INFO CARD ─────────────────────────────────
+
+Layout: horizontal on desktop, vertical on mobile
+Thumbnail: 160x90px, border-radius: 10px, object-fit: cover
+  border: 1px solid rgba(255,255,255,0.08)
+
+Title: heading size, max 2 lines, overflow ellipsis
+Channel: small size, text-secondary, with channel icon (Lucide)
+Duration: mono size, glass-bg pill badge
+  padding: 2px 8px, border-radius: 999px
+
+─── TAB SYSTEM ──────────────────────────────────────
+
+Tab bar:
+  display: flex
+  background: rgba(255,255,255,0.03)
+  border: 1px solid rgba(255,255,255,0.06)
+  border-radius: 10px
+  padding: 4px
+  gap: 4px
+
+Tab button:
+  flex: 1
+  height: 36px
+  border-radius: 7px
+  font-size: 13px, weight 500
+color: text-secondary
+  background: transparent
+
+  ACTIVE STATE:
+    background: rgba(99,102,241,0.2)
+color: #818cf8
+    border: 1px solid rgba(99,102,241,0.3)
+
+─── FORMAT OPTION ROWS ──────────────────────────────
+
+Each format is a clickable row:
+  display: flex, align-items: center, justify-content: space-between
+  padding: 12px 16px
+  border-radius: 10px
+  cursor: pointer
+  transition: all 0.15s ease
+
+  LEFT SIDE:
+    Quality badge (e.g. "1080p"):
+      background: rgba(99,102,241,0.15)
+      border: 1px solid rgba(99,102,241,0.25)
+      border-radius: 6px
+      padding: 3px 10px
+      font: mono, 13px, weight 500
+color: #818cf8
+
+    Format label (e.g. "MP4 • H.264"):
+      font-size: 14px, text-primary, margin-left: 12px
+
+  RIGHT SIDE:
+    File size: mono, 12px, text-muted
+    Download icon: Lucide Download, 16px, text-secondary
+
+  HOVER:
+    background: rgba(255,255,255,0.06)
+    border-color: rgba(99,102,241,0.3)
+    Download icon color → accent-primary
+
+─── PROGRESS BAR ────────────────────────────────────
+
+Container:
+  height: 4px
+  background: rgba(255,255,255,0.06)
+  border-radius: 999px
+  overflow: hidden
+
+Fill:
+  height: 100%
+  background: linear-gradient(90deg, #6366f1, #8b5cf6)
+  border-radius: 999px
+  transition: width 0.3s ease
+  box-shadow: 0 0 10px rgba(99,102,241,0.6)  (glow on fill)
+
+Percentage text:
+  font: mono, 13px
+color: text-accent
+
+Status text:
+  font-size: 13px
+color: text-secondary
+  Examples: "Downloading..." / "Merging audio..." / "Converting to MP3..."
+
+─── COMPANION WARNING BANNER ────────────────────────
+
+Position: top of page, full width
+background: rgba(239,68,68,0.1)
+border-bottom: 1px solid rgba(239,68,68,0.2)
+padding: 12px 20px
+display: flex, align-items: center, gap: 12px
+
+Icon: LucideAlertTriangle, color: #ef4444
+Text: "Companion not running. Open terminal and run: python companion.py"
+Code snippet: mono font, glass-bg pill
+
+─── SUCCESS STATE ───────────────────────────────────
+
+Checkmark animation:
+  SVG circle with stroke-dasharray animation
+Color: accent-success (#10b981)
+  Size: 64px
+  Animation: draw in over 0.6s ease
+
+Text: "Downloaded successfully"
+  font: heading, color: text-primary
+
+Sub-text: filename in mono, text-secondary
+
+Button: "Download Another"
+  Same style as main CTA button
+
+---
+
+## Animation System
+
+PAGE LOAD:
+  Body fades in: opacity 0 → 1, duration 0.4s
+
+CARD APPEAR (video info card):
+  opacity: 0 → 1
+  transform: translateY(20px) → translateY(0)
+  duration: 0.4s, easing: cubic-bezier(0.16, 1, 0.3, 1)
+
+TAB SWITCH:
+  Content fades: opacity 0 → 1, duration 0.2s
+
+FORMAT ROW STAGGER (when tab content loads):
+  Each row delays by index * 40ms
+  opacity: 0 → 1, translateY(8px) → 0
+
+STATE TRANSITIONS:
+  All state changes: crossfade via opacity
+  duration: 0.25s ease
+
+BUTTON INTERACTIONS:
+  scale: 1 → 0.97 on mousedown
+  scale: back to 1 on mouseup
+  duration: 0.1s
+
+PROGRESS BAR FILL:
+  width transition: 0.3s ease (smooth, not jumpy)
+
+---
+
+## Layout & Spacing
+
+BREAKPOINTS:
+  Mobile:  < 640px
+  Desktop: ≥ 640px
+
+PAGE LAYOUT:
+  min-height: 100vh
+  display: flex, flex-direction: column, align-items: center
+  padding: 40px 20px (desktop) / 20px 16px (mobile)
+  gap: 32px between major sections
+
+MAIN CONTAINER:
+  max-width: 680px
+  width: 100%
+  margin: 0 auto
+
+SECTION SPACING:
+  Between URL bar and video card: 24px
+  Between video info and tabs: 20px
+  Between tab bar and format list: 12px
+  Between format rows: 8px
+
+---
+
+## Iconography
+
+SOURCE: Lucide Icons via CDN
+USAGE GUIDE:
+  Download arrow:   <i data-lucide="download"></i>
+  Music note:       <i data-lucide="music"></i>
+  Video camera:     <i data-lucide="video"></i>
+  Image:            <i data-lucide="image"></i>
+  Link:             <i data-lucide="link"></i>
+  Check:            <i data-lucide="check-circle-2"></i>
+  Warning:          <i data-lucide="alert-triangle"></i>
+  Clipboard:        <i data-lucide="clipboard"></i>
+  X / Close:        <i data-lucide="x"></i>
+  Loader spinner:   <i data-lucide="loader-2"></i> with CSS spin animation
+
+ICON SIZES:
+  In buttons: 16px
+  In headers: 20px
+  In success/error states: 48px
+
+SPIN ANIMATION for loader:
+  @keyframes spin { to{ transform: rotate(360deg) } }
+  animation: spin 1s linear infinite
+
+---
+
+## Responsive Rules
+
+MOBILE (< 640px):
+  Video info card: stack thumbnail above text (flex-direction: column)
+  Thumbnail: full width, aspect-ratio: 16/9
+  Tab labels: icons only (no text)
+  Format rows: hide file size on very small screens
+  Progress section: full width
+
+DESKTOP (≥ 640px):
+  Video info card: thumbnail left, info right (flex-direction: row)
+  All labels visible
+  Max-width container centers content
+
+---
+
+## Negative Space Rules
+
+NEVER:
+  - Put two CTAs next to each other at equal visual weight
+  - Show more than one state at a time
+  - Use pure white (#ffffff) anywhere
+  - Use border-radius less than 6px
+  - Animate duration longer than 0.6s (feels sluggish)
+  - Use more than 3 font sizes in one component
+
+ALWAYS:
+  - Add at least 16px padding inside any glass card
+  - Leave breathing room between sections (min 20px gap)
+  - Use muted colors for secondary information
+  - Ensure text contrast ratio ≥ 4.5:1 for accessibility

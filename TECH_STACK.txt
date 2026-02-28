@@ -1,0 +1,128 @@
+﻿# VidDrop — Tech Stack Document
+
+---
+
+## Frontend Stack
+
+RUNTIME: Browser (no build step, no npm, no bundler)
+LANGUAGE: Vanilla JavaScript (ES2020+)
+STYLING: Pure CSS with glassmorphism design system
+FONTS: Google Fonts — Inter (UI) + JetBrains Mono (filenames/sizes)
+ICONS: Lucide Icons via CDN (https://unpkg.com/lucide@latest)
+ANIMATIONS: CSS transitions + keyframes only (no GSAP, no libraries)
+SINGLE FILE: Everything in one index.html — no separate .css or .js files
+
+---
+
+## Backend Stack
+
+LANGUAGE: Python 3.8+
+FRAMEWORK: FastAPI (async, lightweight, auto-docs at /docs)
+SERVER: Uvicorn (ASGI server, runs FastAPI)
+DOWNLOADER: yt-dlp (actively maintained youtube-dl fork)
+MEDIA PROCESSING: ffmpeg (system binary, called via yt-dlp)
+HTTP CLIENT: requests (thumbnail proxy fetching)
+CONCURRENCY: threading.Thread for download subprocess isolation
+
+---
+
+## Communication Layer
+
+PROTOCOL: HTTP/REST + SSE (Server-Sent Events)
+BASE URL: http://localhost:7701
+CORS: Fully open (allow_origins=["*"]) — local only, no security risk
+
+ENDPOINTS:
+GET  /ping                  → health check
+GET  /info?url=             → fetch video metadata + format list
+  POST /download              → start download job, returns job_id + file stream
+GET  /progress/{job_id}     → SSE stream of download progress
+GET  /thumbnail?video_id=&quality=  → proxied thumbnail image
+
+---
+
+## External Dependencies
+
+yt-dlp         → pip install yt-dlp
+fastapi        → pip install fastapi
+uvicorn        → pip install uvicorn
+requests       → pip install requests
+ffmpeg         → system install (NOT pip)
+               Windows: winget install ffmpeg OR chocolatey
+               Mac: brew install ffmpeg
+               Linux: apt install ffmpeg
+
+---
+
+## Data Flow Architecture
+
+USER pastes URL
+  → index.html validates format client-side
+  → fetch GET /info?url= to companion.py
+  → companion runs: yt-dlp --dump-json {url}
+  → parses formats JSON
+  → returns structured VideoInfo object to frontend
+  → frontend renders video card + format buttons
+
+USER clicks download button
+  → fetch POST /download with { url, format_id, ext, type, audio_format }
+  → companion generates job_id
+  → spawns subprocess thread running yt-dlp
+  → frontend opens EventSource /progress/{job_id}
+  → progress bar updates in real-time via SSE
+  → on completion: companion streams file bytes back
+  → frontend triggers browser file save dialog
+
+USER clicks thumbnail download
+  → fetch GET /thumbnail?video_id={id}&quality={max|hq|low}
+  → companion fetches from img.youtube.com (bypasses CORS)
+  → streams image bytes back
+  → frontend saves as {video_id}_{quality}.jpg
+
+---
+
+## Why These Choices
+
+FastAPI over Flask:
+  - Native async support
+  - SSE streaming built-in
+  - Automatic /docs endpoint for debugging
+  - Pydantic models for request validation
+
+yt-dlp over youtube-dl:
+  - Actively maintained (youtube-dl abandoned)
+  - Better format selection
+  - More reliable extraction
+  - Built-in ffmpeg merging support
+
+Vanilla JS over React/Vue:
+  - Zero setup for end user
+  - Single file delivery
+  - No node_modules nightmare
+  - Loads instantly
+
+SSE over WebSocket:
+  - Simpler (one-way: server → client)
+  - No handshake overhead
+  - Native browser EventSource API
+  - Perfect for progress streaming
+
+---
+
+## Version Pins (requirements.txt)
+
+fastapi>=0.100.0
+uvicorn>=0.23.0
+yt-dlp>=2024.1.0
+requests>=2.31.0
+
+---
+
+## System Requirements
+
+Python: 3.8 or higher
+ffmpeg: Must be in system PATH
+RAM: 100MB minimum during download
+Disk: Temp space in /tmp/vidrop_downloads/ (auto-cleaned after download)
+OS: Windows 10+, macOS 11+, Ubuntu 20.04+
+Browser: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+

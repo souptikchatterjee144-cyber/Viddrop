@@ -1,0 +1,604 @@
+﻿# VidDrop — Negative Prompts & Anti-Patterns Document
+# What the AI IDE must NEVER do when implementing VidDrop
+
+---
+
+## PURPOSE OF THIS DOCUMENT
+
+This file exists to prevent the AI IDE from making common
+"helpful" mistakes — where it adds things that seem reasonable
+but break the design, architecture, or user experience.
+
+Every item here is a specific failure mode observed when AI
+tools implement projects like this without explicit constraints.
+
+---
+
+## SECTION 1: VISUAL & UI ANTI-PATTERNS
+
+─── NEVER use pure white (#ffffff) anywhere ─────────
+
+WHY: Pure white on dark backgrounds creates harsh contrast
+     that destroys the premium glassmorphism aesthetic
+INSTEAD: Use #f1f5f9 (near-white) for primary text
+         Use rgba(255,255,255,0.06) for glass surfaces
+
+─── NEVER use flat solid color backgrounds ──────────
+
+WHY: Destroys the depth and dimension of the design
+INSTEAD: All backgrounds must use rgba() with low opacity
+         All surfaces must have the glass card treatment
+
+─── NEVER add a navigation bar or header ────────────
+
+WHY: VidDrop is a single-purpose tool
+     A nav bar implies multiple pages/sections that don't exist
+     It wastes vertical space and adds visual noise
+INSTEAD: App title is just text, centered, no bar around it
+
+─── NEVER use default blue browser link color ───────
+
+WHY: Clashes with the indigo accent palette
+     Looks like an afterthought, not intentional design
+INSTEAD: All links use --accent-primary color (#6366f1)
+         Underline only on hover
+
+─── NEVER use border-radius less than 6px ───────────
+
+WHY: Sharp corners look harsh on glassmorphism
+     Every element should feel soft and dimensional
+INSTEAD: Minimum 6px, prefer 10-16px for cards
+         Buttons: minimum 10px
+
+─── NEVER use more than 3 different font sizes
+    in one component ──────────────────────────────
+
+WHY: Creates visual noise and hierarchy confusion
+INSTEAD: Each component uses max: title, body, label
+
+─── NEVER use CSS animations longer than 0.6 seconds
+
+WHY: Feels sluggish and unprofessional
+     Users want feedback, not a show
+INSTEAD: Entrance animations: 0.3-0.4s
+         Hover transitions: 0.15-0.2s
+         Toast slide: 0.25s
+
+─── NEVER use box-shadow with pure black ────────────
+
+WHY: Pure black shadows look cheap and flat
+INSTEAD: rgba(0,0,0,0.4) maximum opacity
+         Prefer rgba(0,0,0,0.3) for most shadows
+Colored shadows for glow effects (use accent color)
+
+─── NEVER show more than one active state at a time ─
+
+WHY: Multiple UI states visible simultaneously
+     creates confusion about what's happening
+INSTEAD: Strict state machine — only one state-* div
+         visible at any moment
+
+─── NEVER use emoji as icons ────────────────────────
+
+WHY: Inconsistent rendering across OS/browser
+     Looks unprofessional in a tool interface
+INSTEAD: Always use Lucide icons via CDN
+         Size: 16px in buttons, 20px in headers
+
+─── NEVER add a sidebar ─────────────────────────────
+
+WHY: VidDrop has no use for a sidebar
+     Would make mobile experience terrible
+     Adds complexity with zero benefit
+
+─── NEVER use table layout for format options ───────
+
+WHY: Tables are rigid, ugly, hard to style for glass
+INSTEAD: Flexbox rows with space-between
+         Each row is an independent glass-panel div
+
+─── NEVER add drop shadows to text ──────────────────
+
+WHY: Text shadows on dark glassmorphism look amateurish
+INSTEAD: Use color hierarchy (primary/secondary/muted)
+         to create contrast without shadows
+
+─── NEVER animate the background orbs ───────────────
+
+WHY: Moving orbs cause motion sickness for some users
+     They also waste GPU on a utility tool
+INSTEAD: Orbs are static, only provide ambient depth
+         Subtle CSS hover effects on interactive elements only
+
+─── NEVER use gradients on text more than once ──────
+
+WHY: Gradient text is a strong visual statement
+     Using it everywhere makes it meaningless
+INSTEAD: Reserve gradient text for the app title only
+         All other text uses solid colors
+
+─── NEVER set overflow: hidden on the body ──────────
+
+WHY: This breaks toast notifications that slide up
+     from the bottom edge
+INSTEAD: Set overflow on specific containers only
+         Body must allow toast container to be visible
+
+---
+
+## SECTION 2: JAVASCRIPT ANTI-PATTERNS
+
+─── NEVER use innerHTML for user-supplied data ──────
+
+WHY: XSS vulnerability — video titles from YouTube
+     can contain HTML/script injection
+INSTEAD: Always use textContent for user data
+         Only use innerHTML for hardcoded template strings
+         Sanitize titles: remove < > & characters
+
+─── NEVER use var declarations ──────────────────────
+
+WHY: Function-scoped var causes bugs in async code
+     Multiple handlers can step on each other
+INSTEAD: Use const for values that don't change
+         Use let for values that do
+         Never var
+
+─── NEVER use synchronous XMLHttpRequest ────────────
+
+WHY: Blocks the browser's main thread
+     Freezes the entire UI during network calls
+INSTEAD: Always use fetch() with async/await
+         Or EventSource for streaming
+
+─── NEVER create more than one EventSource
+    for the same job ──────────────────────────────
+
+WHY: Multiple EventSources to same endpoint
+     causes duplicate progress updates
+     Progress bar will jump erratically
+INSTEAD: Always close existing EventSource before
+         opening new one
+         Store reference in window.currentEventSource
+Call .close() explicitly
+
+─── NEVER call URL.revokeObjectURL() immediately
+after .click() ────────────────────────────────
+
+WHY: Revoking before browser processes the download
+     cancels the file download mid-stream
+INSTEAD: setTimeout(() => URL.revokeObjectURL(url), 100)
+         100ms delay gives browser time to start download
+
+─── NEVER use alert() or confirm() dialogs ──────────
+
+WHY: Browser native dialogs are ugly and blocking
+     They interrupt glassmorphism aesthetic completely
+INSTEAD: Always use the custom toast notification system
+         For confirmations: inline UI state changes
+
+─── NEVER hardcode localhost:7701 in more than
+    one place ─────────────────────────────────────
+
+WHY: If port ever changes, must update everywhere
+INSTEAD: Define once at top of script:
+const API_BASE = "http://localhost:7701"
+         All fetch calls use: API_BASE + "/endpoint"
+
+─── NEVER use document.write() ──────────────────────
+
+WHY: Overwrites entire document when called after load
+     Completely breaks the app
+INSTEAD: Use DOM manipulation methods exclusively:
+createElement, appendChild, innerHTML (safe contexts)
+
+─── NEVER fetch without AbortController ─────────────
+
+WHY: Long-running fetches (download) have no cancel path
+     User cannot stop a download without it
+INSTEAD: Every major fetch gets its own AbortController
+         Store in window.abortController
+         Abort in cancel handler and reset handler
+
+─── NEVER use setInterval for progress polling ──────
+
+WHY: Polling is wasteful and creates timing issues
+     Progress can jump non-linearly
+INSTEAD: Use SSE (EventSource) as designed
+         Server pushes updates, no polling needed
+
+─── NEVER swallow errors silently ───────────────────
+
+WHY: Errors disappear, user sees nothing, thinks it worked
+INSTEAD: Every catch block must either:
+         a) setState(STATES.ERROR) with message, OR
+         b) showToast(error, "error")
+         Never catch without handling
+
+─── NEVER reassign window.videoData during download ─
+
+WHY: Download in progress uses videoData for filename
+     Overwriting it mid-download corrupts the save
+INSTEAD: Copy needed values to local const before
+         starting download:
+const filename = sanitize(window.videoData.title)
+         Then use local const, not window.videoData
+
+─── NEVER use try/catch around EventSource ──────────
+
+WHY: EventSource errors don't throw, they fire onerror
+INSTEAD: Always set es.onerror handler:
+es.onerror = (e) => { es.close(); handleSSEError() }
+
+---
+
+## SECTION 3: PYTHON / BACKEND ANTI-PATTERNS
+
+─── NEVER use shell=True in subprocess calls ────────
+
+WHY: Shell injection vulnerability
+     Special characters in URLs or format_ids break it
+     Format IDs contain +, [, ], =, which break shell parsing
+INSTEAD: Always pass command as list:
+         ["yt-dlp", "-f", format_id, "-o", output, url]
+
+─── NEVER store file in memory before streaming ─────
+
+WHY: Large video files (1GB+) will crash the server
+     Python process memory usage spikes to file size
+INSTEAD: Stream from disk using generator:
+         def iterfile(path):
+           with open(path, "rb") as f:
+             yield from f
+
+─── NEVER expose raw Python tracebacks to frontend ──
+
+WHY: Leaks internal file paths, library versions
+     Confuses users with technical gibberish
+INSTEAD: Catch all exceptions at endpoint level
+         Return: {"error": "human readable message"}
+         Log full traceback server-side only
+
+─── NEVER use global mutable state without care ─────
+
+WHY: Thread safety issues when multiple downloads run
+Dict updates in Python are GIL-protected for simple ops
+     But complex operations (read-modify-write) are not
+INSTEAD: Keep job updates atomic (single key assignment)
+         jobs[job_id]["progress"] = value  ← safe
+         Avoid: jobs[job_id]["list"].append(x)  ← unsafe
+
+─── NEVER delete temp file before streaming ends ────
+
+WHY: Streaming reads from the file
+     Deleting mid-stream causes broken download
+INSTEAD: Delete in finally block AFTER StreamingResponse
+         actually completes:
+         Pattern: use background task for cleanup
+         Or: delete after thread join confirms completion
+
+─── NEVER bind server to 0.0.0.0 ───────────────────
+
+WHY: Exposes companion server to entire local network
+     Anyone on same WiFi could trigger downloads
+INSTEAD: Always bind to 127.0.0.1 only:
+uvicorn.run(app, host="127.0.0.1", port=7701)
+
+─── NEVER use requests.get() without timeout ────────
+
+WHY: Thumbnail fetch can hang indefinitely
+     Blocks the server response forever
+INSTEAD: Always set timeout:
+requests.get(url, timeout=10)
+
+─── NEVER ignore yt-dlpreturncode ──────────────────
+
+WHY: yt-dlp exits with 0 even on some errors
+     And exits non-zero on some warnings
+INSTEAD: Check BOTH returncode AND presence of output file
+         if returncode != 0 AND no output file: it's an error
+         if returncode != 0 BUT file exists: it's a warning
+
+─── NEVER use blocking sleep in async endpoint ──────
+
+WHY: time.sleep() in async function blocks entire event loop
+     All other requests freeze during the sleep
+INSTEAD: Always use: await asyncio.sleep(0.3)
+         Only in async def functions
+         Run sync sleep only in thread workers
+
+─── NEVER hardcode /tmp path on Windows ─────────────
+
+WHY: /tmp does not exist on Windows
+     Will cause FileNotFoundError on startup
+INSTEAD: Use: Path(tempfile.gettempdir()) / "vidrop_downloads"
+tempfile.gettempdir() returns correct temp dir
+         for current OS automatically
+
+─── NEVER parse yt-dlp JSON from stderr ─────────────
+
+WHY: JSON dump goes to stdout, not stderr
+     stderr contains only progress/error text
+INSTEAD: result.stdout → JSON data
+result.stderr → error messages only
+         Never mix them up
+
+─── NEVER run yt-dlp --update in companion.py ───────
+
+WHY: Causes unexpected behavior changes mid-session
+     May break format parsing if API changes
+INSTEAD: Let user manage yt-dlp version manually
+         Just check version on startup, don't auto-update
+
+─── NEVER use print() for server logging ────────────
+
+WHY: Print statements mix with uvicorn log output
+     Hard to distinguish debug from real logs
+INSTEAD: Use Python logging module:
+         import logging
+         logger = logging.getLogger("vidrop")
+         logger.info("message")
+
+---
+
+## SECTION 4: ARCHITECTURE ANTI-PATTERNS
+
+─── NEVER add a database ────────────────────────────
+
+WHY: VidDrop is a session-based local tool
+     SQLite/PostgreSQL adds setup complexity with zero benefit
+     In-memory dict is sufficient for job tracking
+INSTEAD: jobs = {}  ← the only "database" needed
+
+─── NEVER add user authentication ───────────────────
+
+WHY: It's a local tool running on localhost
+     Auth adds login UI, session management, tokens
+     Zero users except the person running it
+INSTEAD: No auth, no sessions, no tokens
+
+─── NEVER split into multiple HTML files ────────────
+
+WHY: Multiple files require a web server to serve them
+     Breaks the "just open index.html" experience
+     CORS issues if files are on file:// protocol
+INSTEAD: Single index.html with all CSS and JS inline
+
+─── NEVER add a download queue/history UI ───────────
+
+WHY: Scope creep — MVP is single download at a time
+     History requires persistent storage (localStorage)
+     Which is unnecessary complexity for v1
+INSTEAD: One download at a time, success state resets to idle
+
+─── NEVER add social sharing features ───────────────
+
+WHY: Complete scope creep
+VidDrop is a downloader, not a social platform
+INSTEAD: Nothing. Just download.
+
+─── NEVER add settings/preferences panel ────────────
+
+WHY: No configurable settings needed for MVP
+     Port is hardcoded (acceptable for local tool)
+     Output directory is always browser Downloads
+INSTEAD: Zero settings. Works out of the box.
+
+─── NEVER make companion.py auto-open the browser ───
+
+WHY: Unreliable across OSes and browser configurations
+webbrowser.open() has known issues on Linux
+     User may want to open manually
+INSTEAD: Just print the URL
+         "Open index.html in your browser"
+
+─── NEVER add WebSocket instead of SSE ──────────────
+
+WHY: WebSocket is bidirectional — overkill for progress
+     Requires different server setup (websockets library)
+     More complex client-side handling
+INSTEAD: SSE is perfect for one-way progress streaming
+         Simpler, native browser support, less code
+
+─── NEVER add playlist support ──────────────────────
+
+WHY: Massive scope increase
+     Playlist logic needs queue, progress per item, total progress
+     This is v2+ feature
+INSTEAD: Enforce --no-playlist flag always in yt-dlp commands
+         Show error if playlist URL detected
+
+─── NEVER add video preview/player ──────────────────
+
+WHY: Playing video in browser requires different permissions
+     Not needed for a downloader
+     Adds significant UI complexity
+INSTEAD: Thumbnail preview is sufficient visual feedback
+
+─── NEVER use Flask instead of FastAPI ──────────────
+
+WHY: Flask lacks native async support
+     SSE streaming is harder to implement correctly
+     No automatic request validation
+INSTEAD: FastAPI as specified — do not substitute
+
+─── NEVER use youtube-dl instead of yt-dlp ─────────
+
+WHY: youtube-dl is effectively abandoned (last update 2021)
+     Many YouTube URLs now fail with youtube-dl
+yt-dlp is the actively maintained fork
+INSTEAD: yt-dlp only — do not substitute
+
+---
+
+## SECTION 5: CONTENT & COPY ANTI-PATTERNS
+
+─── NEVER use technical jargon in user-facing
+    error messages ────────────────────────────────
+
+EXAMPLES OF WHAT NOT TO SHOW:
+  "HTTP 403 Forbidden"
+  "JSONDecodeError: Expecting value at line 1"
+  "subprocess.CalledProcessError"
+  "No such file or directory: /tmp/vidrop/..."
+
+INSTEAD:
+  "This video is unavailable."
+  "Could not read video data. Try again."
+  "Download failed. Check your internet connection."
+
+─── NEVER use ALL CAPS for UI labels ────────────────
+
+WHY: Aggressive, hard to read, not premium-feeling
+EXCEPTION: Tab labels (VIDEO / AUDIO / THUMBNAIL)
+           are acceptable in small uppercase
+           because they're short identifiers, not sentences
+
+─── NEVER add placeholder text that says
+    "Enter URL here" or similar ─────────────────────
+
+WHY: Redundant — the input bar context makes it obvious
+INSTEAD: Placeholder: "https://youtube.com/watch?v=..."
+         Shows format, not instruction
+
+─── NEVER use loading text that says "Please wait" ──
+
+WHY: Feels passive and unhelpful
+INSTEAD: Describe what's happening:
+         "Fetching video info..."
+         "Analyzing available formats..."
+
+─── NEVER add a footer with copyright text ──────────
+
+WHY: Copyright on a local personal tool is meaningless
+     Wastes vertical space
+     Looks like a template website
+INSTEAD: No footer. Clean bottom edge.
+
+─── NEVER add "Powered by yt-dlp" branding ─────────
+
+WHY: While yt-dlp deserves credit, in-app branding
+     adds noise to the UI
+INSTEAD: Credit in README.md only
+
+---
+
+## SECTION 6: PERFORMANCE ANTI-PATTERNS
+
+─── NEVER load Tailwind CSS from CDN ────────────────
+
+WHY: Full Tailwind CSS is 3.5MB uncompressed
+     Way too large for a simple single-page utility
+     Adds significant load time
+INSTEAD: Write all CSS from scratch as designed
+         Total CSS should be under 400 lines
+
+─── NEVER import React, Vue, or any JS framework ────
+
+WHY: Zero need for component framework on single page
+     Adds hundreds of KB of JavaScript
+     Complicates the single-file architecture
+INSTEAD: Vanilla JS only, as specified
+
+─── NEVER use console.log in production code ────────
+
+WHY: Clutters browser console
+     Leaks internal app state to anyone who opens DevTools
+INSTEAD: Remove all console.log before final output
+         Only keep console.error for actual errors
+
+─── NEVER preload all thumbnails at once ────────────
+
+WHY: Only one video is shown at a time
+     Multiple thumbnail preloads waste bandwidth
+INSTEAD: Preload only the current video's thumbnail
+         Create one new Image() object per /info response
+
+─── NEVER use CSS * selector with expensive properties
+
+WHY: backdrop-filter on * selector tanks performance
+INSTEAD: Apply backdrop-filter only to specific
+.glass-card and .glass-card-elevated elements
+
+─── NEVER open multiple SSE connections ─────────────
+
+WHY: Each EventSource is a persistent HTTP connection
+     Multiple open connections consume server resources
+INSTEAD: One EventSource at a time
+window.currentEventSource.close() before new one
+
+---
+
+## SECTION 7: MOBILE / RESPONSIVE ANTI-PATTERNS
+
+─── NEVER use fixed pixel widths on cards ───────────
+
+WHY: Fixed widths break on small screens
+INSTEAD: max-width with width: 100%
+         Cards flow to container width
+
+─── NEVER use hover-only interactions ───────────────
+
+WHY: Mobile has no hover state
+     Touch users cannot access hover-only features
+INSTEAD: All important info visible without hover
+         Hover enhances desktop, not required for function
+
+─── NEVER use font-size below 13px ──────────────────
+
+WHY: Below 13px is hard to read on mobile
+     iOS auto-zooms inputs with font-size < 16px
+INSTEAD: Minimum 13px for all text
+         Input fields: minimum 16px font-size to prevent zoom
+
+─── NEVER use :hover pseudo-class for click feedback ─
+
+WHY: On mobile, :hover fires and sticks after tap
+     Creates stuck hover states
+INSTEAD: Use :active for click feedback
+:hover for desktop enhancement only
+
+---
+
+## SECTION 8: SECURITY ANTI-PATTERNS
+
+─── NEVER pass URLs directly to shell commands ──────
+
+WHY: URL could contain shell metacharacters
+     ; && || could execute arbitrary commands
+INSTEAD: Always pass as list argument to subprocess
+         Never use shell=True
+         Never use f"yt-dlp {url}" with shell=True
+
+─── NEVER log or display full file system paths ─────
+
+WHY: Leaks server directory structure
+     /tmp/vidrop_downloads/{job_id}.mp4 should never
+     appear in any user-facing response
+INSTEAD: Reference files only by job_id in responses
+         Full paths stay server-side only
+
+─── NEVER allow path traversal in filename ──────────
+
+WHY: If filename contains "../../../etc/passwd"
+     file could be written to dangerous locations
+INSTEAD: sanitize_filename() must:
+         1. Remove all path separators (/ and \)
+         2. Remove .. sequences
+         3. Keep only alphanumeric, spaces, hyphens, underscores
+         4. Truncate to 120 chars
+
+─── NEVER serve the companion on a public IP ────────
+
+WHY: Would expose download capability to internet
+INSTEAD: Host binding MUST be 127.0.0.1
+         Document this clearly in README
+         If user changes it, they accept responsibility
+
+─── NEVER store YouTube cookies or credentials ──────
+
+WHY: Storing auth tokens is a security risk
+VidDrop should work with public videos only
+INSTEAD: No cookie flags, no --username, no --password
+         in yt-dlp commands
+         Age-restricted = error message, not workaround

@@ -1,0 +1,437 @@
+﻿# VidDrop — Backend Schema & API Contract
+
+---
+
+## Server Configuration
+
+HOST: 127.0.0.1 (localhost only, never exposed externally)
+PORT: 7701
+BASE_URL: http://localhost:7701
+FRAMEWORK: FastAPI + Uvicorn
+TEMP_DIR: /tmp/vidrop_downloads/  (auto-created on startup)
+AUTO_CLEANUP: temp files deleted immediately after streaming to browser
+
+---
+
+## Data Models (Pydantic Schemas)
+
+─── VideoFormat ─────────────────────────────────────
+
+{
+  label:      string    — display name e.g. "1080p", "720p"
+format_id:  string    — yt-dlp format string
+                          e.g. "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+ext:        string    — output extension: "mp4" | "webm"
+  size:       string    — human readable e.g. "~120 MB"
+has_audio:  boolean   — whether stream includes audio track
+}
+
+─── AudioFormat ─────────────────────────────────────
+
+{
+  label:      string    — e.g. "MP3 (Best Quality)", "M4A 128kbps"
+format_id:  string    — yt-dlp format string e.g. "bestaudio", "140"
+ext:        string    — "mp3" | "m4a" | "webm" | "opus"
+  size:       string    — human readable or "~varies"
+abr:        number    — audio bitrate in kbps (0 if unknown)
+  conversion: boolean   — true if ffmpeg conversion required (mp3)
+}
+
+─── VideoInfo (full /info response) ─────────────────
+
+{
+video_id:       string         — YouTube video ID (11 chars)
+  title:          string         — full video title
+  uploader:       string         — channel name
+  duration:       string         — formatted "H:MM:SS" or "M:SS"
+  thumbnail:      string         — best thumbnail URL
+video_formats:  VideoFormat[]  — ordered best→worst quality
+audio_formats:  AudioFormat[]  — MP3 first, then native formats
+}
+
+─── DownloadRequest (POST /download body) ───────────
+
+{
+  url:          string           — full YouTube URL
+format_id:    string           — yt-dlp format string
+ext:          string           — desired output extension
+  filename:     string           — sanitized title for save-as
+  type:         "video"|"audio"  — determines yt-dlp command
+audio_format: string|null      — "mp3"|"m4a"|"opus" (audio only)
+}
+
+─── DownloadJob (internal server state) ─────────────
+
+{
+job_id:    string    — uuid4 string
+  status:    string    — "starting"|"downloading"|"merging"
+                         |"converting"|"done"|"error"
+  progress:  number    — 0–100 integer
+  filename:  string    — output filepath on server
+  error:     string    — error message if status=="error"
+}
+
+─── PingResponse ────────────────────────────────────
+
+{
+  status:          "ok" | "error"
+yt_dlp_version:  string    — e.g. "2024.11.18"
+ffmpeg:          boolean   — true if ffmpeg found in PATH
+  port:            number    — 7701
+}
+
+─── ProgressEvent (SSE payload) ─────────────────────
+
+{
+  progress:  number    — 0–100
+  status:    string    — human readable current action
+  eta:       string    — estimated time remaining or ""
+}
+
+─── ThumbnailQuality (enum) ─────────────────────────
+
+"max"  →maxresdefault.jpg  (1280x720, may 404 on older videos)
+"hq"   → hqdefault.jpg      (480x360, always exists)
+"low"  → default.jpg         (120x90,  always exists)
+
+---
+
+## API Endpoints — Full Contract
+
+═══════════════════════════════════════════════════
+ENDPOINT 1: GET /ping
+═══════════════════════════════════════════════════
+
+PURPOSE: Frontend health check on page load
+
+REQUEST:
+  Method: GET
+  Params: none
+  Headers: none required
+
+RESPONSE 200 (healthy):
+  {
+    "status": "ok",
+    "yt_dlp_version": "2024.11.18",
+    "ffmpeg": true,
+    "port": 7701
+  }
+
+RESPONSE 503 (yt-dlp missing):
+  {
+    "status": "error",
+    "message": "yt-dlp not found. Run: pip install yt-dlp"
+  }
+
+FRONTEND BEHAVIOR:
+  success → hide warning banner, show main UI
+  fail    → show full-screen setup instructions overlay
+  timeout → treat as fail (companion not running)
+
+═══════════════════════════════════════════════════
+ENDPOINT 2: GET /info
+═══════════════════════════════════════════════════
+
+PURPOSE: Fetch video metadata and available formats
+
+REQUEST:
+  Method: GET
+  Query param: url (required) — full YouTube URL
+  Example: GET /info?url=https://youtube.com/watch?v=dQw4w9WgXcQ
+
+RESPONSE 200 (success):
+  Full VideoInfo object (see schema above)
+video_formats array: max 8 items (one per resolution)
+audio_formats array: max 5 items (MP3 + top 4 native)
+
+RESPONSE 400 (invalid URL):
+{ "error": "Invalid YouTube URL" }
+
+RESPONSE 400 (yt-dlp error):
+{ "error": "Video unavailable" }
+{ "error": "Sign in to confirm your age" }
+{ "error": "This video is private" }
+
+RESPONSE 408 (timeout):
+{ "error": "Request timed out. Check your connection." }
+
+RESPONSE 500 (parse error):
+{ "error": "Failed to parse video data." }
+
+INTERNAL LOGIC:
+  1. Regex validate URL contains youtube.com or youtu.be
+  2. subprocess.run: yt-dlp --dump-json --no-playlist {url}
+  3. timeout: 30 seconds
+  4. parse stdout as JSON
+  5. call parse_formats(data["formats"])
+  6. build and return VideoInfo
+
+FORMAT PARSING RULES:
+  VIDEO:
+    - Include only formats where vcodec != "none"
+    - Group by height, keep best quality per height
+    - Always override format_id with:
+      "bestvideo[height<={h}]+bestaudio/best[height<={h}]"
+    - Always set ext to "mp4" (ffmpeg merges to mp4)
+    - Heights to include: 2160, 1440, 1080, 720, 480, 360, 240, 144
+    - Skip heights with no available format
+
+  AUDIO:
+    - Include only formats where vcodec == "none"
+    - Sort by abr descending
+    - Prepend MP3 conversion option at index 0
+    - Cap list at 5 total items
+
+═══════════════════════════════════════════════════
+ENDPOINT 3: POST /download
+═══════════════════════════════════════════════════
+
+PURPOSE: Execute download and stream file to browser
+
+REQUEST:
+  Method: POST
+  Content-Type: application/json
+  Body: DownloadRequest object
+
+RESPONSE (success):
+StreamingResponse
+  Content-Type:        video/mp4 | audio/mpeg | audio/mp4 | audio/webm
+  Content-Disposition: attachment; filename="{sanitized_title}.{ext}"
+  Body:                raw file bytes streamed
+
+RESPONSE 400:
+{ "error": "Invalid request parameters" }
+
+RESPONSE 500:
+{ "error": "Download failed: {yt-dlp error message}" }
+
+INTERNAL LOGIC:
+  1. Generate job_id = str(uuid.uuid4())
+  2. Register in jobs dict: status="starting", progress=0
+  3. Sanitize filename:
+       remove: \ / * ? : " < > |
+       strip leading/trailing whitespace
+       truncate to 120 characters
+  4. Build output path: /tmp/vidrop_downloads/{job_id}.%(ext)s
+  5. Build yt-dlp command:
+
+     VIDEO COMMAND:
+yt-dlp
+         -f "{format_id}"
+         --merge-output-format mp4
+         -o "{output_path}"
+         --newline
+         --progress
+         --no-playlist
+         "{url}"
+
+     AUDIO COMMAND (with conversion):
+yt-dlp
+         -f bestaudio
+         -x
+         --audio-format {audio_format}
+         --audio-quality 0
+         -o "{output_path}"
+         --newline
+         --no-playlist
+         "{url}"
+
+     AUDIO COMMAND (no conversion, native):
+yt-dlp
+         -f "{format_id}"
+         -o "{output_path}"
+         --newline
+         --no-playlist
+         "{url}"
+
+  6. Run subprocess, capture stdout line by line
+  7. Parse progress from lines matching pattern:
+       r'\[download\]\s+(\d+\.?\d*)%'
+     Update jobs[job_id].progress with parsed float
+  8. Parse status keywords:
+       "[Merger]"      → status = "merging"
+       "[ffmpeg]"      → status = "converting"
+       "[download]"    → status = "downloading"
+  9. On subprocess exit code 0:
+       Find output file in /tmp/vidrop_downloads/
+       Match by job_id prefix (ext may differ from requested)
+       Set status = "done"
+  10. Stream file bytes as response
+  11. Delete temp file in finally block
+
+CONTENT-TYPE MAP:
+mp4  → video/mp4
+mp3  → audio/mpeg
+  m4a  → audio/mp4
+webm → audio/webm
+  opus → audio/ogg
+
+═══════════════════════════════════════════════════
+ENDPOINT 4: GET /progress/{job_id}
+═══════════════════════════════════════════════════
+
+PURPOSE: Real-time progress updates via SSE
+
+REQUEST:
+  Method: GET
+  Path param: job_id — uuid string from /download response
+  Headers: Accept: text/event-stream
+
+RESPONSE:
+  Content-Type: text/event-stream
+  Cache-Control: no-cache
+  Connection: keep-alive
+
+SSE EVENT FORMAT:
+  data: {"progress": 45, "status": "downloading", "eta": ""}
+
+  data: {"progress": 98, "status": "merging", "eta": ""}
+
+  data: {"progress": 100, "status": "done", "eta": ""}
+
+INTERNAL LOGIC:
+  1. Look up job_id in jobs dict
+  2. If not found: yield error event, close
+  3. While status != "done" and status != "error":
+       yield current progress + status
+       await asyncio.sleep(0.3)
+  4. Yield final progress=100, status="done"
+  5. Close stream
+
+FRONTEND BEHAVIOR:
+  Open EventSource on /progress/{job_id}
+  On each message: update progress bar width to progress%
+  On status="merging": update label text to "Merging tracks..."
+  On status="converting": update label to "Converting to MP3..."
+  On status="done": close EventSource, trigger file save
+  On error event: show error state
+
+═══════════════════════════════════════════════════
+ENDPOINT 5: GET /thumbnail
+═══════════════════════════════════════════════════
+
+PURPOSE: Proxy YouTube thumbnail to avoid CORS
+
+REQUEST:
+  Method: GET
+  Query params:
+video_id: string  — 11 char YouTube video ID
+    quality:  string  — "max" | "hq" | "low"
+
+QUALITY → URL MAP:
+max  → https://img.youtube.com/vi/{video_id}/maxresdefault.jpg
+hq   → https://img.youtube.com/vi/{video_id}/hqdefault.jpg
+low  → https://img.youtube.com/vi/{video_id}/default.jpg
+
+RESPONSE (success):
+StreamingResponse
+  Content-Type:        image/jpeg
+  Content-Disposition: attachment; filename="{video_id}_{quality}.jpg"
+  Body:                raw image bytes
+
+FALLBACK LOGIC:
+  If quality=="max" and response status==404:
+    Automatically retry with quality=="hq"
+    Transparent to frontend
+
+RESPONSE 400:
+{ "error": "Invalid video_id or quality" }
+
+RESPONSE 502:
+{ "error": "Could not fetch thumbnail from YouTube" }
+
+---
+
+## Internal Job Store Schema
+
+STORAGE: In-memory Python dict (no database needed)
+KEY: job_id string
+VALUE: DownloadJob object
+
+LIFECYCLE:
+  Created:  POST /download received
+  Updated:  Every 0.3s during subprocess run
+  Deleted:  Never (stays in memory for session)
+            Old jobs cleaned up on new /ping call
+            (any job older than 1 hour removed)
+
+CONCURRENCY:
+  Multiple jobs can exist simultaneously
+  Each job runs in its own Thread
+  Progress dict updates are atomic (GIL-protected for simple dicts)
+
+---
+
+## Startup Sequence (companion.py __main__)
+
+1. Print ASCII banner:
+   "VidDrop Companion v1.0"
+
+2. Check yt-dlp:
+   run: yt-dlp --version
+   if fails: print install instruction, sys.exit(1)
+
+3. Check ffmpeg:
+shutil.which("ffmpeg")
+   if None: print warning (audio conversion disabled)
+   if found: print "ffmpeg: found"
+
+4. Create temp dir:
+   Path("/tmp/vidrop_downloads").mkdir(parents=True, exist_ok=True)
+
+5. Print:
+   "Server starting at http://localhost:7701"
+   "Open index.html in your browser"
+
+6. Start uvicorn:
+uvicorn.run(app, host="127.0.0.1", port=7701, log_level="warning")
+
+---
+
+## Error Message Standards
+
+All error responses use this exact shape:
+{ "error": "Human readable message here" }
+
+Never expose:
+  - Raw Python tracebacks
+  - File system paths
+  - Internal job IDs in error messages
+  - yt-dlp raw stderr (summarize it)
+
+yt-dlp error translation map:
+  "Sign in to confirm your age"  → "Age-restricted video. Cannot download."
+  "Video unavailable"            → "This video is unavailable or deleted."
+  "Private video"                → "This video is private."
+  "HTTP Error 403"               → "Access denied by YouTube."
+  "Unable to extract"            → "Could not extract video info. Try again."
+
+---
+
+## CORS Configuration
+
+allow_origins:     ["*"]          — open (local use only)
+allow_methods:     ["*"]          — GET, POST, OPTIONS
+allow_headers:     ["*"]          — all headers
+allow_credentials: True
+
+NOTE: This is safe because server only binds to 127.0.0.1
+External machines cannot reach it regardless of CORS settings
+
+---
+
+## File Cleanup Strategy
+
+ON SUCCESSFUL DOWNLOAD:
+  Stream bytes → then os.unlink(filepath) in finally block
+
+ON FAILED DOWNLOAD:
+  finally block still runs → file deleted if exists
+
+ON SERVER RESTART:
+  Startup sequence: scan /tmp/vidrop_downloads/
+  Delete any files older than 1 hour (leftover from crashes)
+
+GLOB PATTERN for finding output file:
+list(DOWNLOAD_DIR.glob(f"{job_id}.*"))[0]
+  (yt-dlp determines final extension, we use wildcard to find it)

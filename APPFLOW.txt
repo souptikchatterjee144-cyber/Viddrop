@@ -1,0 +1,604 @@
+﻿# VidDrop — Application Flow Document
+
+---
+
+## Top-Level Flow Overview
+
+USER opens index.html
+  ↓
+APP checks if companion is running
+  ↓
+├──NO  → Show setup overlay → user starts companion → recheck
+  └── YES → Show main UI
+              ↓
+            USER pastes YouTube URL
+              ↓
+            APP fetches video info
+              ↓
+            USER selects format + clicks download
+              ↓
+            APP streams file to browser
+              ↓
+            Browser saves file to Downloads folder
+              ↓
+            APP shows success state
+              ↓
+            USER clicks "Download Another" → back to URL input
+
+---
+
+## FLOW 1: Application Startup
+
+─── Step 1.1: Page Load ─────────────────────────────
+
+TRIGGER: User opens index.html in browser
+
+ACTIONS:
+  - Render full HTML skeleton (all states pre-rendered, hidden)
+  - Apply glassmorphism CSS
+  - Initialize Lucide icons: lucide.createIcons()
+  - Begin companion health check (Step 1.2)
+  - Show loading state briefly (spinner) during health check
+
+UI STATE: Loading skeleton visible
+
+─── Step 1.2: Companion Health Check ────────────────
+
+TRIGGER: Fires immediately on page load
+
+ACTIONS:
+fetch("http://localhost:7701/ping", {
+    method: "GET",
+    signal: AbortSignal.timeout(3000)   ← 3 second timeout
+  })
+
+BRANCH A — fetch succeeds, status "ok":
+  - Store ffmpeg availability: window.ffmpegAvailable = data.ffmpeg
+  - If ffmpeg=false: show ffmpeg warning banner (non-blocking)
+  - Hide companion warning overlay
+  - Transition to STATE 0: IDLE (show URL input)
+  - Focus cursor on URL input field automatically
+
+BRANCH B — fetch fails OR timeout:
+  - Show full setup overlay (see FLOW 6)
+  - Start retry loop: recheck every 3 seconds
+  - When companion starts → auto-dismiss overlay → go to STATE 0
+
+RETRY LOGIC:
+setInterval(checkCompanion, 3000)
+clearInterval when companion found
+  Show retry count: "Checking... (attempt 3)"
+
+─── Step 1.3: ffmpeg Warning Banner ─────────────────
+
+TRIGGER: ping returns ffmpeg=false
+
+ACTIONS:
+  - Show non-blocking amber banner at top:
+    "ffmpeg not found — MP3 conversion disabled.
+     Install ffmpeg to enable audio conversion."
+  - In audio tab: disable MP3 option, show tooltip
+    "Requires ffmpeg — see banner above"
+  - M4A and OPUS still available (no conversion needed)
+
+---
+
+## FLOW 2: URL Input & Video Info Fetch
+
+─── Step 2.1: URL Entry ─────────────────────────────
+
+TRIGGER: STATE 0 is active (IDLE)
+
+UI ELEMENTS VISIBLE:
+  - App title / tagline
+  - URL input field (auto-focused)
+  - Paste button
+  - Fetch button (or Enter key)
+
+PASTE BUTTON BEHAVIOR:
+navigator.clipboard.readText()
+.then(text => {
+inputField.value = text
+      if (isValidYouTubeURL(text)) autoSubmit()
+    })
+  On permission denied: show tooltip "Allow clipboard access"
+
+AUTO-DETECT on input change:
+  If user types/pastes and input matches YouTube URL pattern:
+    Show green checkmark inside input field
+    Enable fetch button
+  Else:
+    Show nothing (don't show red X while typing)
+
+─── Step 2.2: URL Validation (Client-Side) ──────────
+
+TRIGGER: User clicks Fetch button OR presses Enter
+
+REGEX PATTERNS TO ACCEPT:
+  youtube.com/watch?v={11_chars}
+  youtu.be/{11_chars}
+  youtube.com/shorts/{11_chars}
+  youtube.com/embed/{11_chars}
+  m.youtube.com/watch?v={11_chars}
+
+IF INVALID:
+  Shake animation on input field (CSS keyframe)
+  Show inline error: "Please enter a valid YouTube URL"
+  Do NOT proceed to fetch
+
+IF VALID:
+  Extract video_id using regex
+  Transition to STATE 1: LOADING
+  Call fetchVideoInfo(url)
+
+─── Step 2.3: Loading State ─────────────────────────
+
+TRIGGER: Valid URL submitted
+
+UI CHANGES:
+  - URL input becomes read-only (don't hide it)
+  - Show spinner below input
+  - Show text: "Fetching video info..."
+  - Disable fetch button, show loading indicator inside it
+
+TIMEOUT HANDLING:
+  If /info takes > 15 seconds:
+    Show: "Taking longer than expected..."
+  If /info takes > 30 seconds:
+    Abort fetch, show error state
+
+─── Step 2.4: Video Info Response Handling ──────────
+
+TRIGGER: GET /info returns response
+
+BRANCH A — Success (200):
+  Store full response: window.videoData = data
+  Extract video_id from data
+  Preload thumbnail image in background
+  Call renderVideoCard(data)
+  Transition to STATE 2: READY
+
+BRANCH B — Error (400/500):
+  Transition to STATE ERROR
+  Show error message from data.error
+  Show "Try Again" button → resets to STATE 0
+
+─── Step 2.5: Video Card Render ─────────────────────
+
+TRIGGER: Successful /info response
+
+RENDER SEQUENCE:
+  1. Build video info header:
+       - Thumbnail img (src from data.thumbnail)
+       - Title (truncated at 2 lines)
+       - Channel name with user icon
+       - Duration badge
+
+  2. Build tab system:
+       - VIDEO tab (default active)
+       - AUDIO tab
+       - THUMBNAIL tab
+
+  3. Render VIDEO tab content (default visible):
+       Call renderVideoFormats(data.video_formats)
+
+  4. Animate card in:
+       opacity: 0 → 1
+translateY: 20px → 0
+       duration: 400ms cubic-bezier(0.16, 1, 0.3, 1)
+
+  5. Render format rows with stagger:
+       each row delays: index * 40ms
+
+---
+
+## FLOW 3: Format Selection & Tab Navigation
+
+─── Step 3.1: VIDEO Tab ─────────────────────────────
+
+DEFAULT ACTIVE TAB
+
+CONTENT: List of VideoFormat rows
+  For each format in data.video_formats:
+    Render row with:
+      - Quality badge (e.g. "1080p")
+      - Format label ("MP4")
+      - File size (right side)
+      - Download icon (right side)
+      - onClick: startDownload(format.format_id, "video", "mp4", null)
+
+EMPTY STATE:
+  If video_formats is empty:
+    Show: "No video formats found for this video"
+
+─── Step 3.2: AUDIO Tab ─────────────────────────────
+
+TRIGGER: User clicks AUDIO tab
+
+TRANSITION:
+  Current tab content: opacity 0, duration 150ms
+  New tab content renders
+  New tab content: opacity 1, duration 150ms
+
+CONTENT: List of AudioFormat rows
+  For each format in data.audio_formats:
+    Render row with:
+      - Format badge (e.g. "MP3", "M4A")
+      - Bitrate label (e.g. "320kbps")
+      - File size (right side)
+      - If conversion=true AND ffmpeg=false:
+          Row appears dimmed (opacity 0.4)
+          Show lock icon instead of download icon
+          Tooltip: "Requires ffmpeg"
+onClick: disabled
+      - Else:
+          Normal download behavior
+onClick: startDownload(format.format_id, "audio",
+format.ext, format.ext)
+
+─── Step 3.3: THUMBNAIL Tab ─────────────────────────
+
+TRIGGER: User clicks THUMBNAIL tab
+
+CONTENT: Three quality option cards (not rows, larger cards)
+  Each card shows:
+    - Quality label: "Max Resolution" / "High Quality" / "Standard"
+    - Dimensions: "1280×720" / "480×360" / "120×90"
+    - File format: "JPG"
+    - Preview thumbnail (small, same image different resolution)
+    - Download button
+
+onClick each:
+downloadThumbnail(video_id, quality)
+    Show brief "Downloading..." on button
+    On success: button shows checkmark briefly
+
+---
+
+## FLOW 4: Download Execution
+
+─── Step 4.1: Download Initiation ───────────────────
+
+TRIGGER: User clicks a format row download button
+
+PRE-CHECK:
+  If a download is already in progress:
+    Show toast: "A download is already in progress"
+    Do not start new download
+
+ACTIONS:
+  1. Set window.downloadInProgress = true
+  2. Build request body:
+     {
+       url:          window.videoData.url (stored from input)
+format_id:    selected format_id
+ext:          selected ext
+       filename:     sanitize(window.videoData.title)
+       type:         "video" | "audio"
+audio_format: ext if audio, null if video
+     }
+  3. Transition to STATE 3: DOWNLOADING
+  4. Show progress UI:
+       - Filename being downloaded
+       - Format label
+       - Progress bar at 0%
+       - Status text: "Starting..."
+       - Cancel button
+
+  5. Execute POST /download
+  6. Simultaneously open SSE: EventSource /progress/{job_id}
+
+NOTE: /download returns job_id immediately in headers
+      Then streams file when done
+      SSE runs in parallel tracking progress
+
+─── Step 4.2: Progress Tracking ─────────────────────
+
+TRIGGER: EventSource opened on /progress/{job_id}
+
+ON EACH SSE MESSAGE:
+  Parse: { progress, status, eta }
+
+  Update progress bar:
+progressBar.style.width = progress + "%"
+
+  Update status text:
+    "downloading" → "Downloading..."
+    "merging"     → "Merging audio and video tracks..."
+    "converting"  → "Converting to MP3..."
+    "starting"    → "Starting download..."
+
+  Update percentage label:
+progressPercent.textContent = Math.floor(progress) + "%"
+
+  If eta is not empty:
+    Show ETA: "~" + eta + " remaining"
+
+ON STATUS = "done":
+  Close EventSource
+  Progress bar → 100%
+  Trigger file save from POST /download response blob
+
+ON STATUS = "error":
+  Close EventSource
+  Transition to STATE ERROR
+  Show error message
+
+─── Step 4.3: File Save ─────────────────────────────
+
+TRIGGER: POST /download resolves with file blob
+
+ACTIONS:
+  1. response.blob() — get file data
+  2. URL.createObjectURL(blob) — create temp URL
+  3. Create invisible anchor element:
+a.href     = objectURL
+a.download = filename + "." + ext
+  4. Append to document body
+  5. a.click() — triggers browser save dialog
+  6. Remove anchor element
+  7. URL.revokeObjectURL(objectURL) — free memory
+  8. Set window.downloadInProgress = false
+  9. Transition to STATE 4: DONE
+
+─── Step 4.4: Cancel Download ───────────────────────
+
+TRIGGER: User clicks Cancel button during STATE 3
+
+ACTIONS:
+  1. Abort the fetch: abortController.abort()
+  2. Close EventSource
+  3. POST /cancel/{job_id} (optional graceful cancel)
+  4. Set window.downloadInProgress = false
+  5. Transition to STATE 0: IDLE (back to URL input)
+  6. Show brief toast: "Download cancelled"
+
+NOTE: yt-dlp process on server will terminate naturally
+      when client disconnects (broken pipe)
+
+─── Step 4.5: Thumbnail Download ────────────────────
+
+TRIGGER: User clicks thumbnail quality option
+
+ACTIONS:
+  1. Show "Downloading..." state on clicked button
+  2. fetch GET /thumbnail?video_id={id}&quality={quality}
+  3. response.blob()
+  4. Same file save pattern as Step 4.3
+  5. Filename: "{video_id}_{quality}.jpg"
+  6. Button shows checkmark: "Saved!" for 2 seconds
+  7. Returns to normal button state
+
+FALLBACK:
+  If quality="max" returns error:
+    Automatically retry with quality="hq"
+    User sees no interruption
+
+---
+
+## FLOW 5: Completion & Reset
+
+─── Step 5.1: Success State ─────────────────────────
+
+TRIGGER: File saved successfully (STATE 4: DONE)
+
+UI ELEMENTS:
+  - Animated checkmark (SVG stroke animation)
+  - "Downloaded successfully!" heading
+  - Filename in mono font
+  - Format and quality labels
+  - "Download Another" button
+  - "Download Same Video" button (keeps video card, goes to STATE 2)
+
+─── Step 5.2: Reset to IDLE ─────────────────────────
+
+TRIGGER: "Download Another" clicked
+
+ACTIONS:
+  1. Clear window.videoData
+  2. Clear window.currentJobId
+  3. Reset URL input field to empty
+  4. Hide video card
+  5. Transition to STATE 0: IDLE
+  6. Focus URL input field
+
+─── Step 5.3: Re-download Same Video ────────────────
+
+TRIGGER: "Download Same Video" clicked
+
+ACTIONS:
+  1. Keep window.videoData intact
+  2. Transition directly to STATE 2: READY
+  3. Video card remains visible
+  4. All format tabs available again
+  5. User can pick different format
+
+---
+
+## FLOW 6: Setup Overlay (Companion Not Running)
+
+─── Step 6.1: Overlay Display ───────────────────────
+
+TRIGGER: /ping fails on page load
+
+UI: Full-screen overlay (not dismissible)
+  Semi-transparent backdrop: rgba(0,0,0,0.85)
+  Glass card centered: max-width 520px
+
+CONTENT:
+  - Warning icon (large, amber)
+  - Heading: "Start the Companion First"
+  - Explanation: "VidDrop needs its companion server running
+                  to download videos."
+
+  - Step-by-step setup:
+    STEP 1: Install Python (link to python.org)
+    STEP 2: Open terminal in VidDrop folder
+    STEP 3: Run command (copy button):
+            Windows: start.bat
+            Mac/Linux: bash start.sh
+            OR: python companion.py
+    STEP 4: Return to this page (auto-detects)
+
+  - Status indicator:
+    Animated pulse dot: "Waiting for companion..."
+    Updates to: "Checking... (attempt N)" every 3s
+
+─── Step 6.2: Auto-Dismiss ──────────────────────────
+
+TRIGGER: Retry check succeeds (/ping returns ok)
+
+ACTIONS:
+  1. Overlay fades out (opacity 0, duration 300ms)
+  2. Remove overlay from DOM
+  3. Proceed to STATE 0: IDLE
+  4. Show brief success toast: "Companion connected!"
+
+---
+
+## FLOW 7: Error Handling
+
+─── Error State Display ─────────────────────────────
+
+TRIGGER: Any API call returns error response
+
+UI ELEMENTS:
+  - Error icon (red X circle)
+  - Error heading: "Something went wrong"
+  - Error message: human-readable from API
+  - Technical detail: collapsed/expandable (small text)
+  - "Try Again" button → back to STATE 0
+
+SPECIFIC ERROR MESSAGES:
+  "Age-restricted video"
+    → Show: "This video requires age verification.
+VidDrop cannot download age-restricted videos."
+
+  "Private video"
+    → Show: "This video is private and cannot be downloaded."
+
+  "Video unavailable"
+    → Show: "This video is unavailable or has been removed."
+
+  "Network error"
+    → Show: "Connection failed. Check your internet and
+             make sure companion.py is running."
+
+  "ffmpeg required"
+    → Show: "This format requires ffmpeg.
+             Install ffmpeg and restart companion.py."
+
+─── Toast Notification System ───────────────────────
+
+POSITION: Bottom-center of screen
+STYLE: Glass card, small, auto-dismiss after 3 seconds
+TYPES:
+  info    — blue tint
+  success — green tint
+  warning — amber tint
+  error   — red tint
+
+BEHAVIOR:
+  Slides up from bottom: translateY(20px) → 0
+  Auto-dismiss: after 3s, fades out + slides down
+  Max 3 toasts visible at once (oldest dismissed first)
+
+---
+
+## STATE MACHINE SUMMARY
+
+STATE 0: IDLE
+  Visible: URL input bar, paste button, fetch button
+  Hidden:  video card, progress, success, error
+
+STATE 1: LOADING
+  Visible: URL input (readonly), spinner, loading text
+  Hidden:  video card, progress, success, error
+
+STATE 2: READY
+  Visible: URL input (readonly), video card with tabs
+  Hidden:  progress, success, error
+
+STATE 3: DOWNLOADING
+  Visible: Progress bar, filename, status, cancel button
+  Hidden:  URL input, video card, success, error
+
+STATE 4: DONE
+  Visible: Success checkmark, filename, reset buttons
+  Hidden:  URL input, video card, progress, error
+
+STATE ERROR:
+  Visible: Error icon, message, try-again button
+  Hidden:  URL input, video card, progress, success
+
+TRANSITIONS TABLE:
+  0 → 1: URL submitted (valid)
+  1 → 2: /info success
+  1 → E: /info error
+  2 → 3: Format selected, download started
+  3 → 4: Download complete, file saved
+  3 → 0: User cancels
+  3 → E: Download error
+  4 → 0: "Download Another" clicked
+  4 → 2: "Download Same Video" clicked
+  E → 0: "Try Again" clicked
+
+---
+
+## Data Persistence (Session Memory)
+
+window.videoData = {
+  full /info response stored here
+  cleared on reset
+}
+
+window.currentJobId = {
+  active job ID for SSE connection
+  cleared on completion/cancel
+}
+
+window.downloadInProgress = {
+boolean flag
+  prevents concurrent downloads
+}
+
+window.ffmpegAvailable = {
+  set from /ping response
+  used to disable MP3 option if false
+}
+
+window.abortController = {
+AbortController instance
+  used to cancel in-flight fetch requests
+}
+
+---
+
+## Keyboard Shortcuts
+
+Enter       → Submit URL (when input focused)
+Escape      → Cancel download (when in STATE 3)
+Cmd/Ctrl+V  → Paste URL (when input focused, triggers auto-submit)
+
+---
+
+## Performance Considerations
+
+THUMBNAIL PRELOAD:
+  As soon as /info returns, create Image() object
+  Set src to thumbnail URL
+  By time card animates in, image is cached
+
+FORMAT RENDER:
+  Render all tabs upfront (hidden via display:none)
+  Tab switch just toggles display
+  No re-render on tab click (faster)
+
+SSE CONNECTION:
+  Open EventSource BEFORE POST /download resolves
+  Ensures no progress events are missed
+
+MEMORY CLEANUP:
+revokeObjectURL immediately after download trigger
+EventSource.close() on every exit path
+  No orphaned intervals (always clearInterval)

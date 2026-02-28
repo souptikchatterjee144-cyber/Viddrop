@@ -1,0 +1,892 @@
+﻿# VidDrop — Implementation Plan
+
+---
+
+## Overview
+
+Total files to build: 6
+Recommended build order: companion.py → index.html → launchers → README
+Estimated implementation time for AI IDE: 3-4 passes
+Each pass refines and connects the previous layer
+
+---
+
+## BUILD ORDER & RATIONALE
+
+Build companion.py FIRST:
+  Backend is the foundation. Frontend is useless without it.
+  Test each endpoint independently via /docs (FastAPI auto-docs)
+  Verify yt-dlp integration before touching frontend
+
+Build index.html SECOND:
+  Wire against already-working backend
+  Build state machine top-down (STATE 0 → 1 → 2 → 3 → 4)
+  Test each state before moving to next
+
+Build launchers THIRD:
+  start.bat and start.sh are trivial
+  Only after companion.py is confirmed working
+
+Build README LAST:
+  Documents actual final behavior
+  Screenshots can be described in text
+
+---
+
+## PHASE 1: companion.py Implementation
+
+─── Pass 1.1: Skeleton + Config ─────────────────────
+
+IMPLEMENT:
+  - All imports at top
+  - PORT, DOWNLOAD_DIR constants
+  - FastAPI app instance
+  - CORS middleware (allow all)
+  - Empty jobs dict
+  - if __name__ == "__main__" block with uvicorn.run
+
+VERIFY:
+  python companion.py starts without errors
+  http://localhost:7701/docs loads FastAPIdocs page
+
+─── Pass 1.2: Utility Functions ─────────────────────
+
+IMPLEMENT IN ORDER:
+  1. check_ffmpeg() → shutil.which("ffmpeg") → bool
+  2. check_ytdlp()  → subprocess yt-dlp --version → str|None
+  3. sanitize_filename(name) → regex replace + truncate
+  4. format_duration(seconds) → "H:MM:SS" or "M:SS" string
+  5. format_size(bytes) → "~X MB" or "~X GB" string
+  6. parse_formats(formats_list) → (video_list, audio_list)
+
+UNIT TEST parse_formats LOGIC:
+  Mock a formats list with mix of video + audio entries
+  Confirm video_map groups by height correctly
+  Confirm audio_list sorts by bitrate
+  Confirm MP3 option injected at index 0
+  Confirm format_id override uses bestvideo[height<=N]+bestaudio
+
+─── Pass 1.3: /ping Endpoint ────────────────────────
+
+IMPLEMENT:
+  @app.get("/ping")
+  Check yt-dlp via check_ytdlp()
+  If None: return 503 with install message
+  Return PingResponse with version + ffmpeg bool + port
+
+TEST via browser:
+  http://localhost:7701/ping
+  Confirm returns correct JSON
+  Confirm ffmpeg field is accurate
+
+─── Pass 1.4: /info Endpoint ────────────────────────
+
+IMPLEMENT:
+  @app.get("/info")
+  URL validation regex
+subprocess.runyt-dlp --dump-json --no-playlist
+  timeout=30
+  JSON parse stdout
+  Call parse_formats
+  Return VideoInfo structure
+
+CRITICAL IMPLEMENTATION NOTES:
+  Use capture_output=True, text=True on subprocess
+  Parse ONLY stdout, ignore stderr for data extraction
+  Log stderr separately for error detection
+  If returncode != 0: extract last line of stderr as error message
+  Wrap entire function in try/except Exception
+
+TEST with real URLs:
+  Standard video: youtube.com/watch?v=dQw4w9WgXcQ
+  Short: youtube.com/shorts/...
+  Confirm video_formats array populated
+  Confirm audio_formats has MP3 at index 0
+  Confirm duration formatted correctly
+
+─── Pass 1.5: Download Threading ────────────────────
+
+IMPLEMENT run_download() function:
+  Takes: job_id, DownloadRequest
+  Builds yt-dlp command based on type (video/audio)
+subprocess.Popen with stdout=PIPE, stderr=STDOUT, text=True
+  Line-by-line stdout parsing loop:
+    regex match r'\[download\]\s+(\d+\.?\d*)%'
+    update jobs[job_id]["progress"]
+    detect status keywords in line
+  On process exit:
+    if returncode == 0: status = "done"
+    else: status = "error", capture error message
+
+CRITICAL NOTES:
+  Use subprocess.Popen NOT subprocess.run for streaming
+  Read line-by-line with iter(process.stdout.readline, "")
+  Always call process.stdout.close() in finally
+  Always call process.wait() after reading
+  Wrap file-finding in glob with try/except (ext may vary)
+
+─── Pass 1.6: /download Endpoint ────────────────────
+
+IMPLEMENT:
+  @app.post("/download")
+  Generate job_id via uuid4()
+  Initialize jobs[job_id]
+  Start Thread(target=run_download, args=(job_id, req))
+thread.start()
+  Wait for thread to complete (thread.join())
+  Find output file via glob
+  Stream file as StreamingResponse
+  Delete file in finally block
+
+CONTENT-TYPE DETECTION:
+  Build dict: {"mp4":"video/mp4","mp3":"audio/mpeg",
+               "m4a":"audio/mp4","webm":"audio/webm"}
+  Default to "application/octet-stream" if not found
+
+FILENAME IN HEADER:
+  Use RFC 5987 encoding for special characters:
+  Content-Disposition:
+    attachment; filename="{ascii_safe}";
+    filename*=UTF-8''{url_encoded_filename}
+
+STREAMING PATTERN:
+  def iterfile(filepath):
+    with open(filepath, "rb") as f:
+      yield from f
+  return StreamingResponse(iterfile(path), ...)
+
+─── Pass 1.7: /progress SSE Endpoint ────────────────
+
+IMPLEMENT:
+  @app.get("/progress/{job_id}")
+  async generator function
+  Returns StreamingResponse with media_type="text/event-stream"
+
+  async def event_generator():
+    while jobs[job_id]["status"] not in ("done","error"):
+      data = json.dumps({
+        "progress": jobs[job_id]["progress"],
+        "status": jobs[job_id]["status"],
+        "eta": ""
+      })
+      yield f"data: {data}\n\n"
+      await asyncio.sleep(0.3)
+    # Final event
+    yield f"data: {json.dumps({'progress':100,'status':'done'})}\n\n"
+
+CRITICAL NOTES:
+  SSE format REQUIRES double newline: \n\n after each event
+  Include headers: Cache-Control: no-cache
+  Handle job_id not found: yield error event immediately
+
+─── Pass 1.8: /thumbnail Endpoint ───────────────────
+
+IMPLEMENT:
+  @app.get("/thumbnail")
+  Build URL from quality map
+requests.get(url, timeout=10, stream=True)
+  If quality=="max" and status==404:
+    retry with "hq" automatically
+  Return StreamingResponse from response.iter_content
+  Set Content-Disposition for download
+
+─── Pass 1.9: Startup Banner ────────────────────────
+
+IMPLEMENT in __main__:
+  Print formatted startup banner:
+  ┌─────────────────────────────┐
+  │   VidDrop Companion v1.0    │
+  └─────────────────────────────┘
+  Check yt-dlp → print version or exit
+  Check ffmpeg → print found/not found
+  Create temp dir
+  Print server URL
+uvicorn.run(...)
+
+---
+
+## PHASE 2: index.html Implementation
+
+─── Pass 2.1: HTML Skeleton ─────────────────────────
+
+IMPLEMENT:
+  DOCTYPE, html, head, body structure
+  All Google Fonts imports (Inter + JetBrains Mono)
+Lucide CDN script tag
+  Meta viewport for mobile
+
+HEAD INCLUDES:
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VidDrop</title>
+  Google Fonts link tag
+Lucide script: https://unpkg.com/lucide@latest
+  All CSS in <style> block
+
+BODY STRUCTURE:
+<!-- Background orbs (decorative) -->
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+
+<!-- Companion warning banner (hidden by default) -->
+  <div id="companion-banner" class="hidden">...</div>
+
+<!--ffmpeg warning banner (hidden by default) -->
+  <div id="ffmpeg-banner" class="hidden">...</div>
+
+<!-- Main container -->
+  <div class="container">
+
+<!-- STATE 0: IDLE + STATE 1: LOADING (URL input area) -->
+    <div id="state-input">...</div>
+
+<!-- STATE 2: READY (video card) -->
+    <div id="state-ready" class="hidden">...</div>
+
+<!-- STATE 3: DOWNLOADING (progress) -->
+    <div id="state-downloading" class="hidden">...</div>
+
+<!-- STATE 4: DONE (success) -->
+    <div id="state-done" class="hidden">...</div>
+
+<!-- STATE ERROR -->
+    <div id="state-error" class="hidden">...</div>
+
+  </div>
+
+<!-- Setup overlay (companion not running) -->
+  <div id="setup-overlay" class="hidden">...</div>
+
+<!-- Toast container -->
+  <div id="toast-container"></div>
+
+<!-- All JS in <script> block at bottom -->
+
+─── Pass 2.2: CSS — Base & Reset ────────────────────
+
+IMPLEMENT FIRST:
+  * { margin:0; padding:0; box-sizing:border-box }
+:root{ all CSS custom properties as variables }
+  body { background, font, color, min-height: 100vh }
+.hidden{ display: none !important }
+
+CSS VARIABLES TO DEFINE (all colors from UI_GUIDELINES):
+  --bg-primary, --bg-secondary
+  --accent-primary, --accent-secondary, --accent-glow
+  --accent-success, --accent-warning, --accent-error
+  --glass-bg, --glass-border, --glass-hover
+  --text-primary, --text-secondary, --text-muted, --text-accent
+  --radius-sm: 8px
+  --radius-md: 12px
+  --radius-lg: 16px
+  --blur: blur(20px) saturate(180%)
+  --transition: all 0.2s ease
+
+─── Pass 2.3: CSS — Background & Orbs ───────────────
+
+IMPLEMENT:
+  body background gradient (3 stops as per UI_GUIDELINES)
+
+.orb base styles:
+    position: fixed
+    pointer-events: none
+    border-radius: 50%
+    filter: blur(40px)
+    z-index: 0
+
+.orb-1: top-left, 600px, indigo gradient
+.orb-2: bottom-right, 500px, violet gradient
+.orb-3: center, 800px, subtle indigo
+
+  All content elements: position: relative, z-index: 1
+
+─── Pass 2.4: CSS — Glass Components ────────────────
+
+IMPLEMENT GLASS CARD CLASSES:
+.glass-card        → base glass (UI_GUIDELINES BASE GLASS CARD)
+.glass-card-elevated → stronger shadow version
+.glass-panel       → inner panel (no backdrop-filter)
+.glass-input       → input field glass style
+.glass-btn-primary → gradient CTA button
+.glass-btn-ghost   → transparent button
+.glass-btn-accent  → indigo tinted button
+
+ALL INTERACTIVE ELEMENTS:
+  Add transition: var(--transition) to all
+
+HOVER STATES:
+.glass-panel:hover → glass-hover bg + accent border + glow
+
+─── Pass 2.5: CSS — Layout & Typography ─────────────
+
+IMPLEMENT:
+  .container:
+    max-width: 680px
+    margin: 0 auto
+    padding: 40px 20px
+    display: flex
+    flex-direction: column
+    gap: 24px
+
+  All typography classes from UI_GUIDELINES type scale
+
+  @media (max-width: 640px):
+    .container padding: 20px 16px
+.video-card flex-direction: column
+    .tab-label hide text (icon only)
+
+─── Pass 2.6: CSS — Animations ──────────────────────
+
+IMPLEMENT KEYFRAMES:
+  @keyframes fadeUp:
+    from: opacity 0, translateY(20px)
+    to:   opacity 1, translateY(0)
+
+  @keyframes spin:
+    to: rotate(360deg)
+
+  @keyframes shake:
+    0%,100%: translateX(0)
+    25%: translateX(-8px)
+    75%: translateX(8px)
+
+  @keyframes checkDraw:
+    (SVG stroke-dashoffset animation for checkmark)
+
+  @keyframes pulse:
+    0%,100%: opacity 1
+    50%: opacity 0.4
+
+  @keyframes slideUp:
+    from: opacity 0, translateY(20px)
+    to:   opacity 1, translateY(0)
+
+UTILITY ANIMATION CLASSES:
+.animate-fade-up    → fadeUp 400ms cubic-bezier(0.16,1,0.3,1)
+.animate-spin       → spin 1s linear infinite
+.animate-shake      → shake 300ms ease
+.animate-pulse      → pulse 2s ease infinite
+.stagger-1 through .stagger-8 → animation-delay: N*40ms
+
+─── Pass 2.7: JavaScript — Core State Machine ───────
+
+IMPLEMENT AS FIRST JS BLOCK:
+
+const STATES = {
+    IDLE: "idle",
+    LOADING: "loading",
+    READY: "ready",
+    DOWNLOADING: "downloading",
+    DONE: "done",
+    ERROR: "error"
+  }
+
+  let currentState = STATES.IDLE
+
+  function setState(newState) {
+currentState = newState
+    // Hide all state containers
+    ["state-input","state-ready","state-downloading",
+     "state-done","state-error"].forEach(id => {
+document.getElementById(id).classList.add("hidden")
+    })
+    // Show correct container
+const map = {
+      [STATES.IDLE]:        "state-input",
+      [STATES.LOADING]:     "state-input",
+      [STATES.READY]:       "state-ready",
+      [STATES.DOWNLOADING]: "state-downloading",
+      [STATES.DONE]:        "state-done",
+      [STATES.ERROR]:       "state-error"
+    }
+constel = document.getElementById(map[newState])
+el.classList.remove("hidden")
+el.classList.add("animate-fade-up")
+
+    // State-specific setup
+    if (newState === STATES.LOADING) showLoadingInInput()
+    if (newState === STATES.IDLE)    resetInputField()
+  }
+
+─── Pass 2.8: JavaScript — Companion Check ──────────
+
+IMPLEMENT:
+  async function checkCompanion():
+    try:
+AbortSignal.timeout(3000)
+      fetch localhost:7701/ping
+      if ok:
+window.ffmpegAvailable = data.ffmpeg
+        if not ffmpeg: showFFmpegBanner()
+clearInterval(retryInterval)
+hideSetupOverlay()
+setState(STATES.IDLE)
+focusInput()
+    catch:
+showSetupOverlay()
+incrementRetryCount()
+
+  let retryInterval = setInterval(checkCompanion, 3000)
+checkCompanion() // immediate first check
+
+─── Pass 2.9: JavaScript — URL Handling ─────────────
+
+IMPLEMENT:
+  function isValidYouTubeURL(url):
+    return /youtube\.com\/watch\?v=|youtu\.be\/|
+youtube\.com\/shorts\/|youtube\.com\/embed\//
+           .test(url)
+
+  function extractVideoId(url):
+    patterns array covering all URL formats
+    return matched ID or null
+
+  async function fetchVideoInfo(url):
+setState(STATES.LOADING)
+    try:
+      response = await fetch(
+        "http://localhost:7701/info?url=" + encodeURIComponent(url)
+      )
+      data = await response.json()
+      if not response.ok:
+        throw new Error(data.error)
+window.videoData = data
+window.currentURL = url
+renderVideoCard(data)
+setState(STATES.READY)
+    catch err:
+showError(err.message)
+setState(STATES.ERROR)
+
+  Input event listener:
+    on "input": validate, show/hide green indicator
+    on "keydown Enter": call handleSubmit()
+
+handleSubmit():
+url = input.value.trim()
+    if not isValidYouTubeURL(url): shakeInput(), showInlineError()
+    else: fetchVideoInfo(url)
+
+  Paste button:
+navigator.clipboard.readText()
+    set input value
+    if valid: auto-submit after 300ms delay
+
+─── Pass 2.10: JavaScript — Render Functions ────────
+
+IMPLEMENT renderVideoCard(data):
+  Populate thumbnail src
+  Populate title text (truncate if needed)
+  Populate uploader text
+  Populate duration badge
+  Call renderVideoFormats(data.video_formats)
+  Pre-render all tab contents (hidden)
+  Call renderAudioFormats(data.audio_formats)
+  Call renderThumbnailOptions(data.video_id)
+
+IMPLEMENT renderVideoFormats(formats):
+  Clear video-format-list container
+  For each format:
+    Create row element from template
+    Set quality badge text
+    Set size text
+    Add stagger class (stagger-N)
+    Add click handler: startDownload(...)
+    Append to container
+
+IMPLEMENT renderAudioFormats(formats):
+  Similar to video
+  Check window.ffmpegAvailable for MP3 row
+  If conversion=true AND not ffmpegAvailable:
+Add .disabled class to row
+    Replace download icon with lock icon
+    Remove click handler
+
+IMPLEMENT renderThumbnailOptions(video_id):
+  Three hardcoded quality cards
+  Each with: downloadThumbnail(video_id, quality) handler
+
+─── Pass 2.11: JavaScript — Download Flow ───────────
+
+IMPLEMENT startDownload(format_id, type, ext, audio_format):
+  if window.downloadInProgress: showToast("Already downloading")
+window.downloadInProgress = true
+window.abortController = new AbortController()
+
+  Update downloading state UI:
+    Set filename display
+    Set format label
+    Reset progress bar to 0%
+setState(STATES.DOWNLOADING)
+
+  // Start SSE before POST (parallel)
+  // We get job_id from response header
+const response = await fetch("http://localhost:7701/download", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({...}),
+    signal: window.abortController.signal
+  })
+
+  // Get job_id from response header
+constjobId = response.headers.get("X-Job-ID")
+window.currentJobId = jobId
+
+  // Open SSE AFTER getting job_id
+startProgressTracking(jobId)
+
+  // Get file blob
+const blob = await response.blob()
+triggerFileSave(blob, filename, ext)
+setState(STATES.DONE)
+
+IMPLEMENT startProgressTracking(jobId):
+const es = new EventSource(
+    "http://localhost:7701/progress/" + jobId
+  )
+es.onmessage = (event) => {
+const data = JSON.parse(event.data)
+updateProgressBar(data.progress)
+updateStatusText(data.status)
+    if (data.status === "done" || data.status === "error"):
+es.close()
+  }
+es.onerror = () => es.close()
+window.currentEventSource = es
+
+IMPLEMENT triggerFileSave(blob, filename, ext):
+consturl = URL.createObjectURL(blob)
+const a = document.createElement("a")
+a.href = url
+a.download = filename + "." + ext
+document.body.appendChild(a)
+a.click()
+document.body.removeChild(a)
+setTimeout(() => URL.revokeObjectURL(url), 100)
+window.downloadInProgress = false
+
+IMPLEMENT downloadThumbnail(video_id, quality):
+const response = await fetch(
+    "http://localhost:7701/thumbnail?video_id=" +
+video_id + "&quality=" + quality
+  )
+const blob = await response.blob()
+triggerFileSave(blob, video_id + "_" + quality, "jpg")
+
+─── Pass 2.12: JavaScript — UI Helpers ──────────────
+
+IMPLEMENT showToast(message, type="info"):
+  Create toast element with type class
+  Append to #toast-container
+  Animate in (slideUp)
+setTimeout 3000ms → animate out → remove
+
+IMPLEMENT showError(message):
+  Set #error-message text
+setState(STATES.ERROR)
+
+IMPLEMENT updateProgressBar(percent):
+document.getElementById("progress-fill").style.width = percent + "%"
+document.getElementById("progress-percent").textContent =
+Math.floor(percent) + "%"
+
+IMPLEMENT updateStatusText(status):
+const labels = {
+    "starting":    "Starting download...",
+    "downloading": "Downloading...",
+    "merging":     "Merging audio and video tracks...",
+    "converting":  "Converting to MP3...",
+    "done":        "Complete!"
+  }
+document.getElementById("status-text").textContent =
+    labels[status] || status
+
+IMPLEMENT resetInputField():
+input.value = ""
+input.disabled = false
+hideInlineError()
+clearGreenIndicator()
+
+IMPLEMENT shakeInput():
+input.classList.add("animate-shake")
+setTimeout(() => input.classList.remove("animate-shake"), 300)
+
+Cancel button handler:
+window.abortController.abort()
+  if window.currentEventSource: window.currentEventSource.close()
+window.downloadInProgress = false
+setState(STATES.IDLE)
+showToast("Download cancelled", "info")
+
+─── Pass 2.13: JavaScript — Tab System ──────────────
+
+IMPLEMENT:
+const tabs = {
+    "video": document.getElementById("tab-video-content"),
+    "audio": document.getElementById("tab-audio-content"),
+    "thumbnail": document.getElementById("tab-thumb-content")
+  }
+
+  function switchTab(tabName):
+    // Fade out current
+Object.values(tabs).forEach(el => {
+el.style.opacity = "0"
+setTimeout(() => el.classList.add("hidden"), 150)
+    })
+    // Fade in selected
+setTimeout(() => {
+      tabs[tabName].classList.remove("hidden")
+      tabs[tabName].style.opacity = "1"
+    }, 150)
+    // Update tab button active states
+updateTabButtons(tabName)
+
+  Tab button click listeners:
+    Each callsswitchTab(tabName)
+
+─── Pass 2.14: JavaScript — Initialization ──────────
+
+DOMContentLoaded event handler (runs everything):
+
+  1. lucide.createIcons()         → render all icons
+  2. checkCompanion()             → start health check + retry loop
+  3. setupInputListeners()        → URL input events
+  4. setupTabListeners()          → tab click events
+  5. setupKeyboardShortcuts()     → Enter, Escape, Ctrl+V
+  6. animatePageIn()              → body fade in
+
+  function animatePageIn():
+document.body.style.opacity = "0"
+requestAnimationFrame(() => {
+document.body.style.transition = "opacity 0.4s ease"
+document.body.style.opacity = "1"
+    })
+
+---
+
+## PHASE 3: Launcher Files
+
+─── start.bat ───────────────────────────────────────
+
+IMPLEMENT:
+  @echo off header
+  Title bar: VidDrop Companion
+  Check Python available: python --version
+  If fail: print install Python message, pause, exit
+  pip install -r requirements.txt --quiet
+  Clear screen
+  python companion.py
+  pause on exit
+
+─── start.sh ────────────────────────────────────────
+
+IMPLEMENT:
+#!/bin/bash shebang
+  Check python3 available
+  If fail: print install message, exit 1
+  pip3 install -r requirements.txt -q
+  Clear terminal
+  python3 companion.py
+
+  Make executable: chmod +x start.sh
+  (note in README)
+
+---
+
+## PHASE 4: requirements.txt
+
+CONTENT (exact, no version pins for flexibility):
+fastapi
+uvicorn[standard]
+yt-dlp
+  requests
+
+NOTE: uvicorn[standard] installs with uvloop for better
+      async performance on Mac/Linux
+
+---
+
+## PHASE 5: README.md
+
+SECTIONS TO INCLUDE:
+  1. What is VidDrop (2 sentences)
+  2. Prerequisites (Python 3.8+, ffmpeg)
+  3. Installation (3 steps: clone/download, run start script, open HTML)
+  4. Usage (4 steps: paste URL, pick format, click download, done)
+  5. ffmpeg Installation (Windows/Mac/Linux commands)
+  6. Troubleshooting (5 common issues + fixes)
+  7. Supported URL Formats (list)
+  8. File Output Location (browser Downloads folder)
+
+---
+
+## CRITICAL IMPLEMENTATION RULES FOR AI IDE
+
+RULE 1 — CORS HEADER ON /download RESPONSE:
+  The file streaming response MUST include:
+  headers={"X-Job-ID": job_id, "Access-Control-Expose-Headers": "X-Job-ID"}
+  Without this, frontend cannot read the job_id from response headers
+
+RULE 2 — SSE DOUBLE NEWLINE:
+  Every SSE event MUST end with \n\n (two newlines)
+  Single \n will break the EventSource parser silently
+  This is the #1 cause of progress bar not updating
+
+RULE 3 — GLOB FOR OUTPUT FILE:
+yt-dlp may change extension (e.g. requested mp4, got mkv)
+  ALWAYS find output file with: DOWNLOAD_DIR.glob(f"{job_id}.*")
+  Never hardcode the extension when looking for the output file
+
+RULE 4 — ABORT CONTROLLER SCOPE:
+  Create new AbortController for EACH download
+  Never reuse the same controller
+  Old controller must be replaced before new download starts
+
+RULE 5 — LUCIDE ICON INITIALIZATION:
+lucide.createIcons() must be called:
+    a) Once on DOMContentLoaded
+    b) Again after any dynamic HTML is injected
+  Icons added after initial call won't render without re-calling
+
+RULE 6 — PROGRESS BAR TRANSITION:
+  Set transition on .progress-fill via CSS, NOT JavaScript
+  JavaScript only updates the width value
+  CSS transition handles the smooth animation
+
+RULE 7 — OBJECT URL CLEANUP:
+  Every URL.createObjectURL() MUST have matching revokeObjectURL()
+  Use setTimeout(100ms) delay before revoking
+  Revoking immediately can cancel download before browser saves
+
+RULE 8 — THREAD JOIN TIMEOUT:
+thread.join(timeout=300) — 5 minute max
+  If timeout exceeded: mark job as error
+  Prevents server hanging forever on stalled download
+
+RULE 9 — SUBPROCESS TEXT MODE:
+  Always use text=True on subprocess.run and Popen
+  Without it, stdout is bytes, not str
+  Regex parsing will silently fail on bytes
+
+RULE 10 — FASTAPI RESPONSE HEADERS:
+StreamingResponse headers must be set in constructor
+  Cannot set headers after response is created
+  Pattern:
+    return StreamingResponse(
+iterfile(filepath),
+media_type=content_type,
+      headers={
+        "Content-Disposition": f'attachment; filename="{safe_name}"',
+        "X-Job-ID": job_id,
+        "Access-Control-Expose-Headers": "X-Job-ID"
+      }
+    )
+
+---
+
+## TESTING CHECKLIST
+
+BACKEND TESTS (manual via /docs or curl):
+[ ] /ping returns 200 with correct yt-dlp version
+[ ] /ping correctly detects ffmpeg present/absent
+[ ] /info works with standard youtube.com/watch URL
+[ ] /info works with youtu.be short URL
+[ ] /info works with youtube.com/shorts URL
+[ ] /info returns error for private video
+[ ] /info returns error for invalid URL
+[ ] /download returns file for video format
+[ ] /download returns MP3 for audio+conversion
+[ ] /download returns M4A for native audio
+[ ] /progress SSE streams progress events
+[ ] /progress returns 100/done at completion
+[ ] /thumbnail returns image for max quality
+[ ] /thumbnail falls back to hq if max 404s
+[ ] Temp files deleted after download
+
+FRONTEND TESTS (manual in browser):
+[ ] Page loads, companion check fires immediately
+[ ] Setup overlay shows when companion not running
+[ ] Setup overlay dismisses when companion starts
+[ ]ffmpeg banner shows when ffmpeg missing
+[ ] URL input validates correctly
+[ ] Invalid URL shows shake animation
+[ ] Valid URL fetches video info
+[ ] Video card renders with thumbnail
+[ ] All video format rows appear
+[ ] All audio format rows appear
+[ ] MP3 row disabled when ffmpeg missing
+[ ] Thumbnail tab shows 3 quality options
+[ ] Download starts, progress bar animates
+[ ] Status text updates (downloading/merging/converting)
+[ ] File saves to Downloads folder
+[ ] Success state shows with filename
+[ ] "Download Another" resets to IDLE
+[ ] "Download Same Video" returns to READY
+[ ] Cancel stops download, returns to IDLE
+[ ] Toast notifications appear and auto-dismiss
+[ ] Error state shows human-readable message
+[ ] Keyboard shortcuts work (Enter, Escape)
+[ ] Mobile layout stacks correctly
+[ ] All Lucide icons render
+
+---
+
+## COMMON PITFALLS TO AVOID
+
+PITFALL 1: yt-dlp format string quoting
+  On Windows, format strings with + must be quoted differently
+  Use list form for subprocess: ["yt-dlp", "-f", format_id, ...]
+  NOT: shell=True with string command
+  shell=True causes issues with special chars in format_id
+
+PITFALL 2: Thumbnail 404 on older videos
+  maxresdefault.jpg does NOT exist for all videos
+  Always implement the hqdefault fallback
+  Test with a pre-2013 YouTube video
+
+PITFALL 3: EventSource and CORS
+EventSource does not support custom headers
+  Since we use allow_origins=["*"] this is fine
+  Do not add Authorization headers to SSE endpoint
+
+PITFALL 4: Large file streaming memory
+  Do NOT load entire file into memory before streaming
+  Use generator pattern (yield chunks) for StreamingResponse
+chunk_size = 8192 bytes (8KB chunks)
+
+PITFALL 5: yt-dlp progress format variation
+yt-dlp progress line format has changed across versions
+  Test with multiple patterns:
+    r'\[download\]\s+(\d+\.?\d*)%'
+    r'(\d+\.?\d*)%\s+of'
+  Use first match found
+
+PITFALL 6: Windows path separators
+  Use pathlib.Path throughout, never string concatenation
+  Path handles / vs \ automatically
+str(Path(...)) converts to correct OS separator
+
+PITFALL 7: ffmpeg not in PATH on Windows
+  User may have ffmpeg installed but not in PATH
+  Check: shutil.which("ffmpeg")
+  If None AND on Windows: also check common install locations
+  C:/ffmpeg/bin/ffmpeg.exe
+  C:/Program Files/ffmpeg/bin/ffmpeg.exe
+
+PITFALL 8: Browser download blocking
+  Browsers may block programmatic downloads without user gesture
+  Solution: ALWAYS trigger download inside a user click handler
+  Never call triggerFileSave() from a setTimeout or async callback
+  that has lost the user gesture context
+  Correct pattern: await download, then save inside same async function
+  that was called by user click
+
+PITFALL 9: CSS backdrop-filter Safari
+  Always include -webkit-backdrop-filter alongside backdrop-filter
+  Without it, glass effect is invisible on Safari/iOS
+
+PITFALL 10: Lucide icons in dynamic HTML
+  Any HTML added after initial lucide.createIcons() call
+  will show empty icon elements
+  Solution: call lucide.createIcons() again after innerHTML updates

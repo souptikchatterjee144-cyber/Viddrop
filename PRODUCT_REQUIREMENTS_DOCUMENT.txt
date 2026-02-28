@@ -1,0 +1,105 @@
+﻿# VidDrop — Product Requirements Document (PRD)
+
+## Product Overview
+Name: VidDrop
+Type: Local desktop web app (HTML frontend + Python backend)
+Purpose: Download YouTube videos, audio, and thumbnails via a beautiful glassmorphism UI
+Architecture: Single HTML file + companion Python script (FastAPI)
+
+---
+
+## Problem Statement
+YouTube downloaders are either:
+- Ugly CLI tools with no UX
+- Sketchy websites with ads and malware
+- Bloated Electron apps
+
+VidDrop is a clean, local, no-ads, no-tracking solution that runs entirely on the user's machine.
+
+---
+
+## Target Users
+- Content creators archiving reference videos
+- Developers needing local video assets
+- Power users who want a clean, fast downloader
+
+---
+
+## Core Features (MVP)
+
+FEATURE 1 — URL Input
+- Single input bar, centered
+- Accepts all YouTube URL formats:
+  youtube.com/watch?v=ID
+  youtu.be/ID
+  youtube.com/shorts/ID
+  youtube.com/embed/ID
+- Paste button (reads clipboard)
+- On submit → calls /info endpoint
+
+FEATURE 2 — Video Info Card
+- Shows after URL submitted
+- Displays: thumbnail, title, channel name, duration
+- Three tabs: VIDEO / AUDIO / THUMBNAIL
+
+FEATURE 3 — Video Download
+- Quality options: 2160p, 1440p, 1080p, 720p, 480p, 360p, 240p, 144p
+- Format: always MP4 (merged via ffmpeg)
+- Shows approximate file size per option
+- One-click download
+
+FEATURE 4 — Audio Download
+- MP3 (converted via ffmpeg, best quality)
+- M4A (native, no conversion)
+- OPUS/WebM (native, smallest size)
+- Shows bitrate per option
+
+FEATURE 5 — Thumbnail Download
+- Three quality options: Max (maxresdefault), HQ (hqdefault), Low (default)
+- Proxied through companion to avoid CORS
+- Downloads as .jpg
+
+FEATURE 6 — Download Progress
+- Real-time progress bar via Server-Sent Events (SSE)
+- Shows: percentage, current status (downloading / merging / converting)
+- Cancel button
+
+FEATURE 7 — Companion Health Check
+- On page load, frontend pings localhost:7701/ping
+- If companion not running → show setup instructions overlay
+- If yt-dlp missing → show install command
+- If ffmpeg missing → show warning (audio conversion disabled)
+
+---
+
+## Non-Features (Out of Scope for MVP)
+- No playlist downloading
+- No queue/batch downloads
+- No user accounts
+- No cloud storage
+- No browser extension
+
+---
+
+## Success Metrics
+- URL to download options in under 3 seconds
+- Zero crashes on standard YouTube URLs
+- Works on Windows, Mac, Linux
+
+---
+
+## Constraints
+- Must work offline (except for YouTube fetching)
+- No npm, no build step — single HTML file
+- Python 3.8+ compatible
+- All dependencies installable via pip
+
+---
+
+## File Deliverables
+1. index.html        — Full frontend UI
+2. companion.py      — FastAPI backend bridge
+3. requirements.txt  — Python dependencies
+4. start.bat         — Windows launcher
+5. start.sh          — Mac/Linux launcher
+6. README.md         — Setup instructions
