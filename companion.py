@@ -692,4 +692,10 @@ if __name__ == "__main__":
     print()
 
     # Start server
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
+    import os
+import uvicorn
+
+PORT = int(os.environ.get("PORT", PORT))
+
+uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+
